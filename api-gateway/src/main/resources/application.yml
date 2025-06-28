@@ -1,0 +1,44 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      routes:
+        - id: customer-service
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/customers/**
+
+        - id: invoice-service
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/invoices/**
+
+        - id: export-service
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/exports/**
+
+        - id: import-service
+          uri: http://localhost:8084
+          predicates:
+            - Path=/api/imports/**
+
+        - id: archive-service
+          uri: http://localhost:8085
+          predicates:
+            - Path=/api/archives/**
+
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_FIRST
+
+  main:
+    web-application-type: reactive
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
