@@ -1,3 +1,4 @@
+
 # Invoice Generator Microservices Project
 
 A complete microservices-based system for managing customers, invoices, exporting, importing, and archiving invoice data — built using Spring Boot 3, Docker, Kafka, and PostgreSQL.
@@ -8,17 +9,17 @@ A complete microservices-based system for managing customers, invoices, exportin
 
 This system consists of the following microservices:
 
-| Service           | Port | Description                                     |
-|------------------|------|-------------------------------------------------|
-| API Gateway       | 8080 | Central gateway for routing requests            |
-| Customer Service  | 8081 | CRUD operations for customer data               |
-| Invoice Service   | 8082 | Handles invoice creation and processing         |
-| Export Service    | 8083 | Exports data as PDF/CSV/ZIP                     |
-| Import Service    | 8084 | Imports data from uploaded CSVs                 |
-| Archive Service   | 8085 | Archives invoices via Kafka                     |
-| Kafka Broker      | 9092 | Message broker for inter-service communication |
-| Zookeeper         | 2181 | Kafka coordination service                      |
-| PostgreSQL (×5)   | 5433–5437 | One per service for isolation             |
+| Service           | Port     | Description                                     |
+|------------------|----------|-------------------------------------------------|
+| API Gateway       | 8080     | Central gateway for routing requests            |
+| Customer Service  | 8081     | CRUD operations for customer data               |
+| Invoice Service   | 8082     | Handles invoice creation and processing         |
+| Export Service    | 8083     | Exports data as PDF/CSV/ZIP                     |
+| Import Service    | 8084     | Imports data from uploaded CSVs                 |
+| Archive Service   | 8085     | Archives invoices via Kafka                     |
+| Kafka Broker      | 9092     | Message broker for inter-service communication |
+| Zookeeper         | 2181     | Kafka coordination service                      |
+| PostgreSQL (×5)   | 5433–5437| One per service for isolation                   |
 
 ---
 
@@ -45,13 +46,45 @@ This system consists of the following microservices:
 git clone https://github.com/YOUR_USERNAME/invoice-generator.git
 cd invoice-generator
 ```
+
 ### 2. Build and Start All Services
+
 ```bash
 docker-compose up --build
 ```
-This will:  
-Build all Spring Boot JARs into Docker images  
-Start Zookeeper, Kafka, Postgres containers  
-Launch all 6 microservices  
 
+This will:
+- Build all Spring Boot JARs into Docker images
+- Start Zookeeper, Kafka, Postgres containers
+- Launch all 6 microservices
 
+### 3. Accessing Services
+
+- API Gateway: [http://localhost:8080](http://localhost:8080)
+- Each service can also be accessed directly via its assigned port (if exposed)
+
+---
+
+## Development Tips
+
+- All service logs are visible in the terminal or Docker Dashboard
+- Use Postman or curl to test endpoints exposed by the API Gateway
+- Kafka messages can be inspected via Kafdrop or a Kafka CLI tool
+- Ensure no port conflicts with existing services on your machine
+
+---
+
+## Folder Structure
+
+```
+invoice-generator/
+├── gateway/
+├── customer-service/
+├── invoice-service/
+├── export-service/
+├── import-service/
+├── archive-service/
+├── docker-compose.yml
+├── .env
+└── README.md
+```
