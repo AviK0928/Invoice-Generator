@@ -1,5 +1,10 @@
 server:
   port: ${PORT:8083}
+  error:
+    include-stacktrace: never
+    include-message: always
+    include-binding-errors: never
+    include-exception: false
 
 spring:
   application:

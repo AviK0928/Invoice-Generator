@@ -1,6 +1,5 @@
 package com.example.invoice.invoice_service.mapper;
 
-import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import com.example.invoice.invoice_service.dto.InvoiceItemDTO;
 import com.example.invoice.invoice_service.dto.InvoiceRequestDTO;
 import com.example.invoice.invoice_service.dto.InvoiceResponseDTO;
@@ -16,7 +15,7 @@ import java.util.stream.Collectors;
 @Component
 public class InvoiceMapper {
 
-    public Invoice toEntity(InvoiceRequestDTO dto, BigDecimal totalAmount) {
+    public Invoice toEntity(InvoiceRequestDTO dto, BigDecimal totalAmount, String contentHash) {
         return Invoice.builder()
                 .customerId(dto.getCustomerId())
                 .invoiceDate(dto.getInvoiceDate())
@@ -24,6 +23,7 @@ public class InvoiceMapper {
                 .archived(false)
                 .createdAt(LocalDateTime.now())
                 .totalAmount(totalAmount)
+                .contentHash(contentHash)
                 .build();
     }
 
@@ -46,28 +46,14 @@ public class InvoiceMapper {
                 .quantity(dto.getQuantity())
                 .unitPrice(dto.getUnitPrice())
                 .totalPrice(dto.getUnitPrice().multiply(BigDecimal.valueOf(dto.getQuantity())))
-                .build()
-        ).collect(Collectors.toList());
+                .build()).collect(Collectors.toList());
     }
-//    public Invoice toEntity(InvoiceEventDTO dto) {
-//        return Invoice.builder()
-//                .invoiceId(dto.getInvoiceId())
-//                .customerId(dto.getCustomerId())
-//                .invoiceDate(dto.getInvoiceDate())
-//                .paymentStatus(dto.getPaymentStatus())
-//                .archived(dto.getArchived())
-//                .createdAt(dto.getCreatedAt())
-//                .totalAmount(dto.getTotalAmount())
-//                .contentHash(dto.getContentHash())
-//                .build();
-//    }
 
     public List<InvoiceItemDTO> toItemDTOList(List<InvoiceItem> items) {
         return items.stream().map(item -> InvoiceItemDTO.builder()
                 .description(item.getDescription())
                 .quantity(item.getQuantity())
                 .unitPrice(item.getUnitPrice())
-                .build()
-        ).collect(Collectors.toList());
+                .build()).collect(Collectors.toList());
     }
 }

@@ -44,7 +44,7 @@ public class Invoice {
     @NotNull
     private BigDecimal totalAmount;
 
-    @Column(nullable = false, updatable = false)
+    @Column(nullable = false, updatable = false, unique = true, length = 64)
     private String contentHash;
 
     @OneToMany(mappedBy = "invoice", cascade = CascadeType.ALL, orphanRemoval = true)

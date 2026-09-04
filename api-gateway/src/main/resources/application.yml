@@ -1,5 +1,10 @@
 server:
   port: ${PORT:8080}
+  error:
+    include-stacktrace: never
+    include-message: always
+    include-binding-errors: never
+    include-exception: false
 
 spring:
   application:
@@ -54,3 +59,15 @@ logging:
   level:
     root: INFO
     org.springframework.cloud.gateway: ${GATEWAY_LOG_LEVEL:INFO}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+server:
+  error:
+    include-stacktrace: on_param
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
