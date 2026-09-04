@@ -5,11 +5,9 @@ import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import com.example.invoice.invoice_service.service.InvoiceService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
-//@Profile("!no-db")
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -17,15 +15,11 @@ public class InvoiceDeletionConsumer {
 
     private static final String TOPIC = "invoice-delete";
     private static final String GROUP_ID = "invoice-service-group";
-    private static final String CONTAINER_FACTORY = "invoiceEventKafkaListenerContainerFactory";
+    private static final String CONTAINER_FACTORY = "invoiceDeletionKafkaListenerFactory";
 
     private final InvoiceService invoiceService;
 
-    @KafkaListener(
-            topics = TOPIC,
-            groupId = GROUP_ID,
-            containerFactory = CONTAINER_FACTORY
-    )
+    @KafkaListener(topics = TOPIC, groupId = GROUP_ID, containerFactory = CONTAINER_FACTORY)
     public void consume(InvoiceEventDTO event) {
         if (event.getEventType() != InvoiceEventType.DELETE_INVOICE) {
             log.debug("Skipping non-delete event: {}", event.getEventType());

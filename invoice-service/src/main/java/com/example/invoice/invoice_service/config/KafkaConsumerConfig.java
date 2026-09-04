@@ -5,11 +5,13 @@ import com.example.invoice.common.kafka.dto.CustomerEventDTO;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.*;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 
 import java.util.HashMap;
@@ -19,86 +21,66 @@ import java.util.Map;
 @EnableKafka
 public class KafkaConsumerConfig {
 
+    private static final String TRUSTED_PACKAGES = "com.example.invoice.common.kafka.dto";
+
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${spring.kafka.consumer.group-id}")
+    private String groupId;
+
+    @Value("${spring.kafka.consumer.auto-offset-reset:earliest}")
+    private String autoOffsetReset;
+
+    private Map<String, Object> baseConfig() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, autoOffsetReset);
+        return props;
+    }
+
+    private <T> ConsumerFactory<String, T> consumerFactory() {
+        JsonDeserializer<T> deserializer = new JsonDeserializer<>();
+        deserializer.addTrustedPackages(TRUSTED_PACKAGES);
+        return new DefaultKafkaConsumerFactory<>(
+                baseConfig(), new StringDeserializer(), deserializer);
+    }
+
+    private <T> ConcurrentKafkaListenerContainerFactory<String, T> listenerFactory(
+            ConsumerFactory<String, T> consumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<String, T> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory);
+        return factory;
+    }
+
     @Bean
     public ConsumerFactory<String, CustomerEventDTO> customerEventConsumerFactory() {
-        JsonDeserializer<CustomerEventDTO> deserializer = new JsonDeserializer<>();
-        deserializer.addTrustedPackages("com.example.invoice.common.kafka.dto");
-        Map<String, Object> props = new HashMap<>();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "invoice-service-group");
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
-        return new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), deserializer);
+        return consumerFactory();
     }
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, CustomerEventDTO> customerEventKafkaListenerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, CustomerEventDTO> factory =
-                new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(customerEventConsumerFactory());
-        return factory;
+        return listenerFactory(customerEventConsumerFactory());
     }
 
     @Bean
     public ConsumerFactory<String, ArchiveEventDTO> archiveResponseConsumerFactory() {
-        JsonDeserializer<ArchiveEventDTO> deserializer = new JsonDeserializer<>();
-        deserializer.addTrustedPackages("com.example.invoice.common.kafka.dto");
-        Map<String, Object> props = new HashMap<>();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "invoice-service-group");
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
-        return new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), deserializer);
+        return consumerFactory();
     }
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, ArchiveEventDTO> archiveResponseKafkaListenerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, ArchiveEventDTO> factory =
-                new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(archiveResponseConsumerFactory());
-        return factory;
+        return listenerFactory(archiveResponseConsumerFactory());
     }
 
     @Bean
     public ConsumerFactory<String, InvoiceEventDTO> invoiceDeletionConsumerFactory() {
-        JsonDeserializer<InvoiceEventDTO> deserializer = new JsonDeserializer<>();
-        deserializer.addTrustedPackages("com.example.invoice.common.kafka.dto");
-        Map<String, Object> props = new HashMap<>();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "invoice-service-group");
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
-        return new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), deserializer);
+        return consumerFactory();
     }
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, InvoiceEventDTO> invoiceDeletionKafkaListenerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, InvoiceEventDTO> factory =
-                new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(invoiceDeletionConsumerFactory());
-        return factory;
+        return listenerFactory(invoiceDeletionConsumerFactory());
     }
-
-//    @Bean
-//    public ConsumerFactory<String, InvoiceEventDTO> invoiceImportedConsumerFactory() {
-//        JsonDeserializer<InvoiceEventDTO> deserializer = new JsonDeserializer<>(InvoiceEventDTO.class);
-//        deserializer.addTrustedPackages("com.example.invoice.common.kafka.dto");
-//
-//        Map<String, Object> props = new HashMap<>();
-//        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-//        props.put(ConsumerConfig.GROUP_ID_CONFIG, "invoice-service-group");
-//        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-//        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
-//
-//        return new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), deserializer);
-//    }
-//
-//    @Bean
-//    public ConcurrentKafkaListenerContainerFactory<String, InvoiceEventDTO> invoiceImportedKafkaListenerContainerFactory() {
-//        ConcurrentKafkaListenerContainerFactory<String, InvoiceEventDTO> factory =
-//                new ConcurrentKafkaListenerContainerFactory<>();
-//        factory.setConsumerFactory(invoiceImportedConsumerFactory());
-//        return factory;
-//    }
-
 }
