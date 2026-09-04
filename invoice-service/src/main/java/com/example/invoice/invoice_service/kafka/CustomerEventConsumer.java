@@ -18,15 +18,13 @@ public class CustomerEventConsumer {
 
     @KafkaListener(topics = TOPIC, groupId = GROUP_ID, containerFactory = "customerEventKafkaListenerFactory")
     public void consume(CustomerEventDTO event) {
-        if (event.getEventType() == EventType.CREATED) {
-            LocalCustomer customer = LocalCustomer.builder()
+        switch (event.getEventType()) {
+            case CREATED, UPDATED -> customerRepository.save(LocalCustomer.builder()
                     .customerId(event.getCustomerId())
                     .name(event.getName())
                     .email(event.getEmail())
-                    .build();
-            customerRepository.save(customer);
-        } else if (event.getEventType() == EventType.DELETED) {
-            customerRepository.deleteById(event.getCustomerId());
+                    .build());
+            case DELETED -> customerRepository.deleteById(event.getCustomerId());
         }
     }
 }

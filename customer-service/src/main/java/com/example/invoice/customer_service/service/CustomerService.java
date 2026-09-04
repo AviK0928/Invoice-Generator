@@ -66,7 +66,7 @@ public class CustomerService {
         customer.setEmail(dto.getEmail());
         customer = customerRepository.save(customer);
 
-        eventProducer.publish(toEvent(customer, EventType.CREATED));
+        eventProducer.publish(toEvent(customer, EventType.UPDATED));
         return CustomerMapper.toDTO(customer);
     }
 

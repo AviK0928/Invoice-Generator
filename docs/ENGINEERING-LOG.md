@@ -1442,3 +1442,106 @@ gateway. Nothing writes to the local filesystem.
 4. `com.lowagie:itext:2.1.7` → OpenPDF. 2009, unmaintained, known CVEs.
 5. api-gateway still on Boot 3.2.5 while everything else is 3.5.3.
 6. `FakeAuthFilter` still accepts the literal string `Bearer faketoken`.
+
+---
+
+## Phase 2 — Enums and Flyway
+
+### PaymentStatus could not express an unpaid invoice
+
+The enum had two values: `SUCCESSFUL` and `FAILED`. An invoicing system with no
+way to represent *unpaid* or *overdue* cannot represent the normal state of an
+invoice — every invoice is one or the other for most of its life.
+
+Added `PENDING` and `OVERDUE`, with `PENDING` first so it reads as the default.
+No data migration needed: `@Enumerated(EnumType.STRING)` stores the name, so
+existing rows are unaffected. The generated CHECK constraint picks up the new
+values on the next schema build.
+
+Also added `UPDATED` to `EventType`. `CustomerService.updateCustomer` was
+publishing `CREATED`; consumers treat it as an upsert so it worked, but the
+event lied about what happened. Consumers now handle `CREATED, UPDATED ->` as
+one branch, which makes the upsert intent explicit rather than incidental.
+
+### ddl-auto replaced with Flyway
+
+`ddl-auto: update` compares entities to the live schema and issues whatever DDL
+it thinks closes the gap. No version history, no rollback, no review — and it
+silently refuses destructive changes, so drift accumulates invisibly.
+
+Now `ddl-auto: validate` with `V1__baseline.sql` per service. Hibernate checks
+the schema against the entities and **refuses to start** if they disagree.
+
+`baseline-on-migrate: false` deliberately: with it `true`, Flyway stamps an
+existing non-empty database as version 1 and skips the baseline entirely, which
+hides drift instead of catching it.
+
+### Writing the baselines surfaced five real problems
+
+The baselines were generated from what `ddl-auto` had built, then cleaned. The
+cleanup was where the findings were.
+
+**No foreign key is indexed.** Postgres does not index FK columns automatically —
+a common assumption from MySQL, where InnoDB does. Every `deleteByInvoiceId` and
+every join was a sequential scan. Neither was `invoice_date`, which all the
+range filters use. Added indexes on FK columns, `customer_id`, `invoice_date`
+and `archived`.
+
+**`archived_invoices.invoice_id` was not unique**, but `findByInvoiceId` returns
+`Optional` — the code assumed uniqueness that nothing enforced. Two archive
+events for the same invoice would have produced duplicates and then thrown on
+read. Now `uk_archived_invoices_invoice_id`.
+
+**Money columns were `NUMERIC(38,2)`** — Hibernate's default for an unqualified
+`BigDecimal`. 38 significant digits is absurd for currency. Narrowed to
+`NUMERIC(19,2)`; Hibernate validates precision loosely so no entity change was
+needed.
+
+**Nullable foreign keys on item tables.** `export_invoice_item.invoice_id` and
+`import_invoice_item.invoice_id` allowed NULL, meaning a line item could exist
+attached to no invoice. Now `NOT NULL` with `ON DELETE CASCADE`.
+
+**Constraint names were unreadable.** Hibernate generates
+`ukrfbvkrffamfql7cjmen8v976v`, which is exactly what appeared in an earlier log
+line as `constraint "ukrfbvkrffamfql7cjmen8v976v" of relation "customers" does
+not exist`. Now `uk_customers_email` — an error message that names the problem.
+
+**`ArchivedInvoiceItem` has two links to its parent**: `invoice_id` and
+`archived_invoice_id`, with nothing keeping them consistent. Preserved because
+the code uses both; it should collapse to one.
+
+### Table naming settled
+
+Three tables were singular against seven plural. All eleven entities also lacked
+`@Table` entirely, relying on Spring Boot's implicit naming strategy — which can
+change between versions and silently rename your tables.
+
+Renamed `export_invoice`, `export_customer`, `export_invoice_item`,
+`import_invoice`, `import_invoice_item` to plural, and added an explicit
+`@Table` to every entity. Free now with empty databases; a rename migration
+later.
+
+### The validation failure that proves the point
+
+Three services refused to start:
+Schema-validation: wrong column type encountered in column [content_hash]
+in table [invoices]; found [bpchar (Types#CHAR)], but expecting [varchar(64)]
+
+I had written `CHAR(64)` on the grounds that SHA-256 hex is fixed-length. The
+entity maps a plain `String`, which Hibernate expects as `varchar`. Changed the
+migration — in Postgres `CHAR` is `VARCHAR` with blank padding, so it is neither
+faster nor smaller, and the padding causes comparison surprises.
+
+**This failure is the entire justification for the step.** `ddl-auto: update`
+would have silently created a second column or ignored the difference.
+`validate` refused to start and named the exact column and both types. It is the
+first time in this project that anything verified the code and the database
+agree.
+
+### Operational note
+
+Editing an applied migration requires `docker compose down -v`. Flyway stores a
+checksum per migration and fails with `Migration checksum mismatch` otherwise.
+Same class of problem as the Kafka cluster metadata and the Postgres init
+script: **stateful containers cache their bootstrap state, and a config change
+alone does not reach them.**

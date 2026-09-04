@@ -19,9 +19,16 @@ spring:
       maximum-pool-size: ${DB_POOL_SIZE:5}
       connection-timeout: 20000
 
+  # Flyway owns the schema. Hibernate only checks that the entities match what
+  # the migrations produced, and fails startup if they diverge.
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
   jpa:
     hibernate:
-      ddl-auto: ${DDL_AUTO:update}
+      ddl-auto: ${DDL_AUTO:validate}
     show-sql: false
     open-in-view: false
     properties:

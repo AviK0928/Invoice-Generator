@@ -5,6 +5,7 @@ import jakarta.validation.constraints.*;
 import lombok.*;
 
 @Entity
+@Table(name = "export_customers")
 @Getter
 @Setter
 @NoArgsConstructor
