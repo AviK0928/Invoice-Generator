@@ -1,0 +1,18 @@
+* text=auto eol=lf
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+mvnw           text eol=lf
+*.sh           text eol=lf
+Dockerfile     text eol=lf
+*.dockerfile   text eol=lf
+
+*.jar   binary
+*.war   binary
+*.zip   binary
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.pdf   binary
+*.ico   binary
