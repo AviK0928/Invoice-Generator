@@ -11,6 +11,7 @@ import com.example.invoice.invoice_service.dto.InvoiceResponseDTO;
 import com.example.invoice.invoice_service.entity.Invoice;
 import com.example.invoice.invoice_service.entity.InvoiceItem;
 import com.example.invoice.invoice_service.entity.LocalCustomer;
+import com.example.invoice.invoice_service.exception.InvalidCustomerException;
 import com.example.invoice.invoice_service.exception.InvoiceNotFoundException;
 import com.example.invoice.invoice_service.kafka.ArchiveEventProducer;
 import com.example.invoice.invoice_service.kafka.InvoiceEventProducer;
@@ -71,7 +72,7 @@ public class InvoiceService {
         @Transactional
         public InvoiceResponseDTO createInvoice(InvoiceRequestDTO dto) {
                 if (!customerRepository.existsById(dto.getCustomerId())) {
-                        throw new IllegalArgumentException("Invalid customerId: " + dto.getCustomerId());
+                        throw new InvalidCustomerException(dto.getCustomerId());
                 }
 
                 String contentHash = hasher.hash(dto);
