@@ -671,3 +671,350 @@ costs nothing then and would cost a rename migration now.
    `PATCH /api/invoices/{id}/status`.
 5. **Unbounded CSV parsing** in `ImportService` — no file size cap, no MIME
    check, `.getRecords()` reads the whole file into memory.
+
+---
+
+## Phase 1 (continued) — Filesystem writes
+
+### Root cause: export-service wrote to disk on every request and every event
+
+Five classes wrote files. None of them cleaned up, and the disk they wrote to
+does not survive a restart on Render.
+
+**`ExportController`** wrote a PDF or ZIP into `java.io.tmpdir` on every
+download and returned a `FileSystemResource` pointing at it. Nothing deleted
+anything. Every download leaked a file permanently.
+
+**`InvoiceEventHandlerService.processInvoiceEvent`** ended with:
+
+```java
+File tempDir = Files.createTempDirectory("invoice_pdfs").toFile();
+pdfExportService.generatePdfForInvoice(invoice, tempDir);
+```
+
+The result was never assigned, read, returned or deleted. **Every consumed
+invoice event created a temp directory and a PDF that stayed on disk forever.**
+PDFs are generated on demand by the controller — this was pure waste. This was
+the worst of the five, and the hardest to spot, because nothing about the code
+looks wrong at a glance.
+
+Found only because changing `generatePdfForInvoice` to return `byte[]` broke the
+call site. **Changing a signature is a cheap way to locate every caller of
+something you suspect is misused** — the compiler does the search for you.
+
+**`BackupScheduler`** wrote a daily CSV to `new File("backups")` — relative to
+the working directory, inside the container, discarded on every restart. A
+backup that silently does not exist is worse than no backup, because you believe
+you have one.
+
+**`CsvExportService`** was entirely unreferenced. `ExportService.generateMonthlyZip`
+called `PdfUtil` and `CsvUtil` directly. Two PDF generation paths existed and
+one was dead.
+
+### Fix: everything in memory, nothing on disk
+
+- `PdfExportService.generatePdfForInvoice` returns `byte[]` via
+  `ByteArrayOutputStream` instead of writing to a `File`.
+- `ExportService.generateMonthlyZip` builds the archive with `ZipOutputStream`
+  over a `ByteArrayOutputStream` — no temp directory, no intermediate files.
+- `ExportController` returns `byte[]` with `ContentDisposition.attachment()`
+  rather than a `FileSystemResource`.
+- `BackupScheduler` and `CsvExportService` deleted.
+- The orphaned PDF generation removed from `InvoiceEventHandlerService`.
+
+### Decision: assembled in memory, deliberately not streamed
+
+`StreamingResponseBody` writes **after** the controller returns, which is
+outside the transaction. With `open-in-view: false`, touching
+`invoice.getItems()` or `invoice.getCustomer()` there throws
+`LazyInitializationException`.
+
+The options were:
+
+1. Assemble inside a `@Transactional(readOnly = true)` method and return bytes.
+2. Project the whole object graph into DTOs up front, then stream.
+3. Re-enable `open-in-view` — rejected, it holds a connection for the entire
+   request including serialization and hides lazy-loading bugs.
+
+Chose (1), with `MAX_INVOICES_PER_EXPORT = 500` to bound worst-case heap on a
+512MB instance, throwing `ExportTooLargeException` beyond that. Option (2) is
+the right answer at real scale and is noted as future work. The trade is
+explicit rather than accidental, which is the point.
+
+`@Transactional(readOnly = true)` is also required on the single-PDF endpoint —
+same lazy-loading reason.
+
+### Detail: the CSV is buffered separately before entering the zip
+
+`CsvUtil.writeCsv` may close the `OutputStream` it is handed. Writing it
+directly into the `ZipOutputStream` would close the archive mid-write and
+truncate it. So the CSV goes to its own `ByteArrayOutputStream` first, and only
+the resulting bytes are written as a zip entry.
+
+`ZipOutputStream` itself stays in try-with-resources — its `close()` writes the
+central directory, so skipping it produces a corrupt archive, not just a leak.
+
+### Note: `ByteArrayOutputStream.close()` is a no-op
+
+Worth recording because static analysers flag it. The JDK implementation is
+literally empty — there is no file descriptor, socket or native handle, and the
+buffer is a `byte[]` collected like any other object. Wrapping it in
+try-with-resources adds noise and closes nothing.
+
+The resource that *did* need attention was `com.lowagie.text.Document`: it is
+not `AutoCloseable`, and an exception between `open()` and `close()` leaves
+`PdfWriter`'s internal state dangling. Wrapped in try/finally with an
+`isOpen()` guard.
+
+**Lesson:** "close every stream" is a good default, but the real question is
+what the resource actually holds. The genuine leak here was never an unclosed
+stream — every `FileOutputStream` was correctly closed in try-with-resources.
+It was that the *files* were never deleted.
+
+### Also fixed: no transaction on the event projection
+
+`processInvoiceEvent` performed four writes across three tables with no
+`@Transactional`. A failure part-way left a partial projection with no rollback.
+Added.
+
+### Still outstanding on ephemeral storage
+
+`import-service` accepts uploads with no size cap, no MIME check, and reads the
+whole CSV into memory via `.getRecords()`. It does not write to disk, so it
+survives Render — but it is a memory exhaustion vector on a 512MB instance.
+
+There is now **no automated backup at all**. That is the honest state and the
+README should say so. The real version writes to object storage (S3/R2) with a
+retention policy — a Phase 6 item once credentials exist.
+
+---
+
+## Phase 1 (continued) — Filesystem writes and the event contract
+
+### Root cause: export-service wrote to disk on every request and every event
+
+Five classes wrote files. None cleaned up, and the disk they wrote to does not
+survive a restart on Render.
+
+**`ExportController`** wrote a PDF or ZIP into `java.io.tmpdir` on every
+download and returned a `FileSystemResource` pointing at it. Nothing deleted
+anything — every download leaked a file permanently.
+
+**`InvoiceEventHandlerService.processInvoiceEvent`** ended with:
+
+```java
+File tempDir = Files.createTempDirectory("invoice_pdfs").toFile();
+pdfExportService.generatePdfForInvoice(invoice, tempDir);
+```
+
+The result was never assigned, read, returned or deleted. **Every consumed
+invoice event created a temp directory and a PDF that stayed on disk forever.**
+PDFs are generated on demand by the controller — this was pure waste. The worst
+of the five and the hardest to spot, because nothing about it looks wrong at a
+glance.
+
+Found only because changing `generatePdfForInvoice` to return `byte[]` broke the
+call site. **Changing a signature is a cheap way to locate every caller of
+something you suspect is misused** — the compiler does the search for you.
+
+**`BackupScheduler`** wrote a daily CSV to `new File("backups")` — relative to
+the working directory, inside the container, discarded on every restart. A
+backup that silently does not exist is worse than no backup, because you believe
+you have one. Deleted rather than patched; a real version writes to object
+storage with a retention policy, which is a Phase 6 item once credentials exist.
+Until then the honest state is "no automated backup," and the README should say
+so.
+
+**`CsvExportService`** was entirely unreferenced — `generateMonthlyZip` called
+`PdfUtil` and `CsvUtil` directly. Two PDF generation paths existed and one was
+dead. Deleted.
+
+### Decision: assembled in memory, deliberately not streamed
+
+`StreamingResponseBody` writes **after** the controller returns, which is outside
+the transaction. With `open-in-view: false`, touching `invoice.getItems()` or
+`invoice.getCustomer()` there throws `LazyInitializationException`.
+
+Options considered:
+
+1. Assemble inside a `@Transactional(readOnly = true)` method, return bytes.
+2. Project the whole object graph into DTOs up front, then stream.
+3. Re-enable `open-in-view` — rejected; it holds a connection for the entire
+   request including serialization, and hides lazy-loading bugs.
+
+Chose (1), with `MAX_INVOICES_PER_EXPORT = 500` bounding worst-case heap on a
+512MB instance and `ExportTooLargeException` beyond that. Option (2) is the
+right answer at real scale and is noted as future work. The trade is explicit
+rather than accidental, which is the point.
+
+`@Transactional(readOnly = true)` is also required on the single-PDF endpoint,
+for the same lazy-loading reason.
+
+### Detail: the CSV is buffered before entering the zip
+
+`CsvUtil.writeCsv` may close the `OutputStream` it is handed. Writing it
+directly into the `ZipOutputStream` would close the archive mid-write and
+truncate it. So the CSV goes to its own `ByteArrayOutputStream` first, and only
+the resulting bytes become a zip entry.
+
+`ZipOutputStream` stays in try-with-resources — its `close()` writes the central
+directory, so skipping it yields a corrupt archive, not just a leak. Verified
+with `unzip -l`, which can only list entries if that directory is present.
+
+### Note: `ByteArrayOutputStream.close()` is a no-op
+
+Recorded because static analysers flag it. The JDK implementation is literally
+empty: no file descriptor, no socket, no native handle, and the buffer is a
+`byte[]` collected like any other object. Wrapping it in try-with-resources adds
+noise and closes nothing.
+
+The resource that *did* need attention was `com.lowagie.text.Document` — not
+`AutoCloseable`, and an exception between `open()` and `close()` leaves
+`PdfWriter`'s internal state dangling. Wrapped in try/finally with an
+`isOpen()` guard.
+
+**Lesson:** "close every stream" is a good default, but the real question is what
+the resource actually holds. The genuine leak here was never an unclosed stream —
+every `FileOutputStream` was correctly closed in try-with-resources. It was that
+the *files* were never deleted.
+
+---
+
+### Discovery: the event carried a fifth of what consumers needed
+
+`InvoiceEventDTO` declares 14 fields — including `name`, `email`, `invoiceDate`,
+`items`, `contentHash`. `InvoiceService.toEvent` populated 5.
+
+export-service builds `ExportCustomer` from `event.getName()` and
+`event.getEmail()`, got nulls, and `@NotBlank` rejected the insert **at commit
+time** — so the failure surfaced as a `RollbackException` thrown from the Kafka
+listener, several frames removed from the actual cause. Bean Validation on
+entities fires at flush, not at assignment, which makes these errors read as
+transaction failures rather than data failures.
+
+The DTO was right; the producer was under-filling it. An event must be
+self-contained — a consumer cannot call back to ask for the rest.
+
+**This reverses an earlier change in this same session.** I had swapped
+`customerRepository.findById(...)` for `existsById(...)` in `createInvoice`
+because the loaded `LocalCustomer` was assigned to an unused variable. It was
+needed — just not yet. *"This variable is unused" and "this data is
+unnecessary" are different claims.*
+
+### Discovery: a failed event is silently discarded
+
+After the validation failure, the consumer group showed `CURRENT-OFFSET 1,
+LAG 0`. Spring Kafka's default error handler retried, gave up, and committed the
+offset. **The message was gone** — no dead-letter topic, no record it ever
+failed, no way to replay it.
+
+Combined with idempotent create short-circuiting the publish (below), a
+downstream service that drops an event has no recovery path at all.
+
+This is the concrete argument for `DefaultErrorHandler` with
+`DeadLetterPublishingRecoverer` in Phase 3. Right now a poison message is
+indistinguishable from a message that was never sent.
+
+### Discovery: idempotent create short-circuits the event publish
+
+`createInvoice` returns the existing invoice when `contentHash` matches, without
+publishing. Combined with events published to no listener being lost forever,
+**a downstream service that missed the original event can never recover it.**
+Retrying the create is a no-op.
+
+The idempotent path is correct in isolation — it must not create a duplicate.
+But "already exists" and "downstream has it" are different questions, and the
+current code conflates them.
+
+An outbox fixes this properly: the event row is written in the same transaction
+as the invoice, and the dispatcher owns delivery. Idempotency then applies to
+the *invoice*, not to the *event*, which is where it belongs.
+
+### Compose gotcha: naming one service stops the others
+
+`docker compose up -d --build invoice-service` starts that service and its
+declared `depends_on` only — and recreating the project stopped the containers
+not named. Ran a test against port 8080 with no gateway running and got silence.
+Check `docker compose ps` before concluding anything from a failed request.
+
+---
+
+### Verification
+
+Not a compile check — these are runtime failures a build cannot catch.
+
+| Check | Result | Proves |
+|---|---|---|
+| `head -c 5 /tmp/inv.pdf` | `%PDF-`, 1399 bytes | fontconfig present in the jammy image; `@Transactional` held for the lazy `getCustomer()`/`getItems()` |
+| `unzip -l /tmp/exp.zip` | 2 entries listed | `ZipOutputStream.close()` wrote the central directory |
+| `docker compose exec export-service ls -la /tmp` | only `hsperfdata_*` and `tomcat.*` | no invoice artefacts — the actual fix |
+| `SELECT * FROM export_customer` | name and email populated | the completed event contract reaches consumers |
+
+The `/tmp` listing is the one that matters. Before this change, every download
+and every consumed event left a file there permanently.
+
+---
+
+## Phase 1 status
+
+**Done**
+
+- `contentHash` populated; creation idempotent
+- Read endpoints with pagination, filtering, entity graph
+- `@Getter`/`@Setter` replacing `@Data` on entities
+- RFC 9457 error contract on the invoice API
+- `@EnableScheduling` on archive-service
+- All five controller paths aligned with gateway routes
+- Import event publish re-enabled
+- All filesystem writes removed from export-service
+- Invoice event contract completed
+
+**Remaining**
+
+1. **The other four services.** customer-service has no GET mapping at all;
+   import, export and archive have no error handling. Mostly applying the
+   invoice-service pattern four more times.
+2. **`ImportController` returns 500 for a missing file** — catches everything
+   indiscriminately. Should be 400.
+3. **Unbounded CSV parsing** in import-service: no size cap, no MIME check,
+   `.getRecords()` reads the whole file into memory. Does not touch disk so it
+   survives Render, but it is a memory exhaustion vector on 512MB.
+4. **`PaymentStatus`** needs `PENDING` and `OVERDUE` before
+   `PATCH /api/invoices/{id}/status` is worth building.
+
+The outbox in Phase 3 now has two concrete motivating incidents in this log
+rather than a textbook justification: the create that fails outright when Kafka
+is down, and the event silently dropped with no replay path.
+
+### Deferred: backup and full-export
+
+`BackupScheduler` and `CsvExportService` were deleted, but for different reasons.
+
+**BackupScheduler** solved a real problem badly. The prior question is what the
+backup is *for*. Disaster recovery is the database platform's job — Neon and
+Supabase both do continuous WAL archiving with point-in-time restore on their
+free tiers, and a homegrown CSV dump is strictly worse. What this project
+actually wants is a **data export** feature: "give me everything as CSV." That
+is on-demand, not a 3am cron.
+
+Phase 6: `GET /api/exports/full`, same in-memory pattern as the monthly zip,
+same size cap. No scheduler, no storage, no credentials. If it ever needs to be
+scheduled, a cron can call the endpoint.
+
+Object storage (S3/R2, presigned URLs, retention policy) only earns its place if
+generated artifacts must outlive the request — emailing a PDF, or a "your export
+is ready" link. Worth building as a feature; not worth building to store backups
+the platform already handles.
+
+**CsvExportService** was not unfinished work — it was a duplicate
+implementation. `generateMonthlyZip` already produces a CSV via `CsvUtil`, and
+that is the one wired to a controller. Deleting the unreachable copy is not
+deferring anything.
+
+One idea from it is worth keeping: it wrote **per-entity CSVs**
+(`customers.csv`, `invoices.csv`, `invoice_items.csv`) rather than one
+denormalised file. That is a better shape for re-import. Decide which when
+building the full-export endpoint; git has the original if needed.
+
+The README should state plainly that backup and restore are delegated to managed
+Postgres. Currently there is no automated backup, and that is the honest state.

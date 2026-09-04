@@ -71,15 +71,14 @@ public class InvoiceService {
          */
         @Transactional
         public InvoiceResponseDTO createInvoice(InvoiceRequestDTO dto) {
-                if (!customerRepository.existsById(dto.getCustomerId())) {
-                        throw new InvalidCustomerException(dto.getCustomerId());
-                }
+                LocalCustomer customer = customerRepository.findById(dto.getCustomerId())
+                                .orElseThrow(() -> new InvalidCustomerException(dto.getCustomerId()));
 
                 String contentHash = hasher.hash(dto);
 
                 return invoiceRepository.findByContentHash(contentHash)
                                 .map(mapper::toDTO)
-                                .orElseGet(() -> persistNew(dto, contentHash));
+                                .orElseGet(() -> persistNew(dto, customer, contentHash));
         }
 
         @Transactional
@@ -95,7 +94,7 @@ public class InvoiceService {
                 invoice.setArchived(true);
                 invoiceRepository.save(invoice);
 
-                producer.publish(toEvent(invoice, InvoiceEventType.ARCHIVED));
+                producer.publish(toEvent(invoice, customer, InvoiceEventType.ARCHIVED));
                 archiveEventProducer.publish(toArchiveEvent(invoice, customer));
         }
 
@@ -119,7 +118,7 @@ public class InvoiceService {
 
         // ---------------------------------------------------------------- internals
 
-        private InvoiceResponseDTO persistNew(InvoiceRequestDTO dto, String contentHash) {
+        private InvoiceResponseDTO persistNew(InvoiceRequestDTO dto, LocalCustomer customer, String contentHash) {
                 BigDecimal totalAmount = dto.getItems().stream()
                                 .map(item -> item.getUnitPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
                                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -130,18 +129,33 @@ public class InvoiceService {
                 invoiceItemRepository.saveAll(items);
                 invoice.setItems(items);
 
-                producer.publish(toEvent(invoice, InvoiceEventType.CREATED));
+                producer.publish(toEvent(invoice, customer, InvoiceEventType.CREATED));
 
                 return mapper.toDTO(invoice);
         }
 
-        private InvoiceEventDTO toEvent(Invoice invoice, InvoiceEventType type) {
+        private InvoiceEventDTO toEvent(Invoice invoice, LocalCustomer customer, InvoiceEventType type) {
                 return InvoiceEventDTO.builder()
                                 .invoiceId(invoice.getInvoiceId())
                                 .customerId(invoice.getCustomerId())
+                                .name(customer.getName())
+                                .email(customer.getEmail())
+                                .invoiceDate(invoice.getInvoiceDate())
                                 .totalAmount(invoice.getTotalAmount())
                                 .paymentStatus(invoice.getPaymentStatus())
+                                .archived(invoice.getArchived())
+                                .createdAt(invoice.getCreatedAt())
+                                .contentHash(invoice.getContentHash())
                                 .eventType(type)
+                                .items(invoice.getItems().stream()
+                                                .map(item -> com.example.invoice.common.kafka.dto.InvoiceItemDTO
+                                                                .builder()
+                                                                .description(item.getDescription())
+                                                                .quantity(item.getQuantity())
+                                                                .unitPrice(item.getUnitPrice())
+                                                                .totalPrice(item.getTotalPrice())
+                                                                .build())
+                                                .toList())
                                 .build();
         }
 

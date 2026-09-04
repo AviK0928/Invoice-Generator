@@ -1,67 +1,84 @@
 package com.example.invoice.export_service.service;
 
-
-import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import com.example.invoice.common.util.CsvUtil;
-import com.example.invoice.common.util.HashUtil;
-import com.example.invoice.common.util.PdfUtil;
-import com.example.invoice.common.util.ZipUtil;
 import com.example.invoice.export_service.entity.ExportInvoice;
 import com.example.invoice.export_service.entity.ExportInvoiceItem;
+import com.example.invoice.export_service.exception.ExportTooLargeException;
 import com.example.invoice.export_service.repository.ExportInvoiceItemRepository;
 import com.example.invoice.export_service.repository.ExportInvoiceRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.io.File;
-import java.io.FileOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @Service
 @RequiredArgsConstructor
 public class ExportService {
 
+    /**
+     * Cap on invoices per export. The archive is assembled in memory (see
+     * below), so this bounds worst-case heap use on a 512MB instance.
+     */
+    private static final int MAX_INVOICES_PER_EXPORT = 500;
+
     private final ExportInvoiceRepository exportInvoiceRepository;
     private final ExportInvoiceItemRepository exportInvoiceItemRepository;
+    private final PdfExportService pdfExportService;
 
-    public File generateMonthlyZip(YearMonth month, File outputDir) throws Exception {
-        List<ExportInvoice> invoiceList = exportInvoiceRepository.findByInvoiceDateBetween(
-                month.atDay(1), month.atEndOfMonth());
+    /**
+     * Builds the monthly archive entirely in memory and returns the bytes.
+     *
+     * Deliberately NOT streamed to the response. StreamingResponseBody writes
+     * after the controller returns, which is outside the transaction — and with
+     * open-in-view disabled, touching invoice.getItems() there throws
+     * LazyInitializationException. Assembling inside the transaction is the
+     * correct trade for this data volume; a true streaming version would need
+     * the whole graph projected into DTOs up front.
+     *
+     * Previously this wrote PDFs and a CSV into java.io.tmpdir, zipped from
+     * disk, and never deleted anything.
+     */
+    @Transactional(readOnly = true)
+    public byte[] generateMonthlyZip(YearMonth month) throws Exception {
+        List<ExportInvoice> invoices = exportInvoiceRepository
+                .findByInvoiceDateBetween(month.atDay(1), month.atEndOfMonth());
 
-        File tempDir = new File(outputDir, "export_" + month);
-        tempDir.mkdirs();
-
-        List<File> generatedFiles = new ArrayList<>();
-
-        // PDF Generation
-        for (ExportInvoice invoice : invoiceList) {
-            InvoiceEventDTO dto = InvoiceEventDTO.builder()
-                    .invoiceId(invoice.getInvoiceId())
-                    .customerId(invoice.getCustomer().getCustomerId())
-                    .totalAmount(invoice.getTotalAmount())
-                    .paymentStatus(invoice.getPaymentStatus())
-                    .eventType(null) // not relevant for static export
-                    .build();
-
-            byte[] pdfBytes = PdfUtil.generateInvoicePdf(dto);
-            File pdfFile = new File(tempDir, "invoice_" + invoice.getInvoiceId() + ".pdf");
-            try (FileOutputStream fos = new FileOutputStream(pdfFile)) {
-                fos.write(pdfBytes);
-            }
-            generatedFiles.add(pdfFile);
+        if (invoices.size() > MAX_INVOICES_PER_EXPORT) {
+            throw new ExportTooLargeException(month, invoices.size(), MAX_INVOICES_PER_EXPORT);
         }
 
-        // CSV Generation
-        String[] headers = {"Invoice ID", "Customer ID", "Customer Name", "Customer Email",
-                "Total Amount", "Payment Status", "Item Description", "Quantity", "Unit Price", "Total Price"};
-        List<String[]> rows = new ArrayList<>();
+        ByteArrayOutputStream zipBytes = new ByteArrayOutputStream();
 
-        for (ExportInvoice invoice : invoiceList) {
-            List<ExportInvoiceItem> items = exportInvoiceItemRepository.findAllByInvoice(invoice);
-            for (ExportInvoiceItem item : items) {
-                rows.add(new String[]{
+        try (ZipOutputStream zip = new ZipOutputStream(zipBytes)) {
+            for (ExportInvoice invoice : invoices) {
+                zip.putNextEntry(new ZipEntry("invoice_" + invoice.getInvoiceId() + ".pdf"));
+                zip.write(pdfExportService.generatePdfForInvoice(invoice));
+                zip.closeEntry();
+            }
+
+            zip.putNextEntry(new ZipEntry("invoices_" + month + ".csv"));
+            zip.write(buildCsv(invoices));
+            zip.closeEntry();
+        }
+
+        return zipBytes.toByteArray();
+    }
+
+    private byte[] buildCsv(List<ExportInvoice> invoices) throws Exception {
+        String[] headers = { "Invoice ID", "Customer ID", "Customer Name", "Customer Email",
+                "Total Amount", "Payment Status", "Item Description", "Quantity",
+                "Unit Price", "Total Price" };
+
+        List<String[]> rows = new ArrayList<>();
+        for (ExportInvoice invoice : invoices) {
+            for (ExportInvoiceItem item : exportInvoiceItemRepository.findAllByInvoice(invoice)) {
+                rows.add(new String[] {
                         invoice.getInvoiceId().toString(),
                         invoice.getCustomer().getCustomerId().toString(),
                         invoice.getCustomer().getName(),
@@ -76,54 +93,10 @@ public class ExportService {
             }
         }
 
-        File csvFile = new File(tempDir, "invoices_" + month + ".csv");
-        try (FileOutputStream csvOut = new FileOutputStream(csvFile)) {
-            CsvUtil.writeCsv(csvOut, headers, rows);
-        }
-        generatedFiles.add(csvFile);
-
-        // ZIP Generation
-        File zipFile = new File(outputDir, "invoice_export_" + month + ".zip");
-        try (FileOutputStream zipOut = new FileOutputStream(zipFile)) {
-            ZipUtil.zipFiles(generatedFiles, zipOut);
-        }
-
-        return zipFile;
-    }
-    public File generateSystemBackupCsv(File outputDir) throws Exception {
-        List<ExportInvoice> invoiceList = exportInvoiceRepository.findAll();
-        String[] headers = {"Invoice ID", "Customer ID", "Customer Name", "Customer Email",
-                "Total Amount", "Payment Status", "Item Description", "Quantity", "Unit Price", "Total Price", "Hash"};
-
-        List<String[]> rows = new ArrayList<>();
-
-        for (ExportInvoice invoice : invoiceList) {
-            List<ExportInvoiceItem> items = exportInvoiceItemRepository.findAllByInvoice(invoice);
-
-            for (ExportInvoiceItem item : items) {
-                String rowData = invoice.getInvoiceId() + "|" + item.getDescription() + "|" + item.getQuantity();
-                String hash = HashUtil.computeSHA256(rowData);
-
-                rows.add(new String[]{
-                        invoice.getInvoiceId().toString(),
-                        invoice.getCustomer().getCustomerId().toString(),
-                        invoice.getCustomer().getName(),
-                        invoice.getCustomer().getEmail(),
-                        invoice.getTotalAmount().toPlainString(),
-                        invoice.getPaymentStatus().name(),
-                        item.getDescription(),
-                        item.getQuantity().toString(),
-                        item.getUnitPrice().toPlainString(),
-                        item.getTotalPrice().toPlainString(),
-                        hash
-                });
-            }
-        }
-
-        File csvFile = new File(outputDir, "system_backup_" + System.currentTimeMillis() + ".csv");
-        try (FileOutputStream out = new FileOutputStream(csvFile)) {
-            CsvUtil.writeCsv(out, headers, rows);
-        }
-        return csvFile;
+        // Written to a buffer rather than straight into the ZipOutputStream:
+        // CsvUtil may close the stream it is handed, which would end the archive.
+        ByteArrayOutputStream csv = new ByteArrayOutputStream();
+        CsvUtil.writeCsv(csv, headers, rows);
+        return csv.toByteArray();
     }
 }
