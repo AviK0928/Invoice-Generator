@@ -1,0 +1,32 @@
+# Build output
+target/
+
+# Environment / secrets
+.env
+*.env
+!.env.example
+
+# Runtime artifacts the app writes to disk (removed in Phase 1)
+backups/
+exports/
+*.pdf
+*.zip
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.factorypath
+.apt_generated/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
