@@ -1729,3 +1729,98 @@ dependency was present. Drop `-q` when the output *is* the answer.
 normal startup, so a count of zero is expected either way. Two bad inferences in
 a row before checking the actual HTTP status codes, which named the problem
 immediately.
+
+---
+
+## Phase 2 (continued) — OpenPDF and shared exception handling
+
+### itext 2.1.7 → OpenPDF
+
+iText 2.1.7 dates from 2009, is unmaintained, and carries known CVEs. OpenPDF is
+a maintained fork that kept the `com.lowagie.text` package names, so the swap is
+a one-line POM change with no code edits at all.
+
+### Extracted BaseExceptionHandler into common
+
+Five copies of `GlobalExceptionHandler` existed. The five framework handlers —
+validation, unreadable body, type mismatch, missing parameter, integrity
+violation, catch-all — plus the `problem()` helper were byte-identical. Only the
+domain handlers differed.
+
+The drift risk was already real: `ExportTooLargeException` had no handler for a
+while, so a guard whose entire purpose was returning 413 returned 500 instead.
+Shared code makes that kind of gap visible.
+
+`BaseExceptionHandler` is deliberately **not** annotated `@RestControllerAdvice`
+— that goes on the concrete subclass. Annotating both registers two advices for
+the same handlers.
+
+Trade-off accepted: `common` was a pure domain library (DTOs, enums, utils) and
+now carries an HTTP concern. `spring-web`, `spring-tx`, `jakarta.servlet-api`
+and `slf4j-api` are `provided` scope so consumers that do not serve HTTP are not
+forced to pull in the web stack.
+
+### common was compiling to Java 8
+
+`<java.version>21</java.version>` was set in `common/pom.xml` and **did
+nothing** — that property is only meaningful under `spring-boot-starter-parent`,
+which this module does not have. Every build logged
+`javac [debug target 1.8]` while the other seven modules targeted 21. No text
+blocks, no records, no `var` — for months, silently.
+
+Fixed with `maven.compiler.release`. Also imported `spring-boot-dependencies` as
+a BOM so versions align with the services without making this a Boot
+application, which removed the hand-pinned `spring-kafka:3.1.2` that conflicted
+with Boot 3.5.3's managed version.
+
+### `provided` and `optional` are not interchangeable
+
+Setting Lombok to `<scope>provided</scope>` broke the build in a genuinely
+confusing way: every Lombok-generated getter on `InvoiceEventDTO` reported as
+`cannot find symbol`, with **no error mentioning Lombok at all**. It read like
+the DTO itself was malformed.
+
+Cause: Lombok is an annotation processor, and Maven's compiler plugin only
+discovers processors on the *compile* classpath. `provided` removes it from
+there, so the processor silently never runs.
+
+Correct form is `<optional>true</optional>` — it prevents the dependency leaking
+transitively to consumers (the thing `provided` was reached for) while keeping
+it where the processor can be found. This is exactly how
+`spring-boot-starter-parent` declares it, which is why the services never hit
+it.
+
+### Also: MissingServletRequestParameterException needs the servlet API
+
+It extends `ServletException`, so compiling a handler for it fails with
+`cannot access jakarta.servlet.ServletException` unless
+`jakarta.servlet:jakarta.servlet-api` is on the classpath. Not obvious from the
+import, which is a `org.springframework.web.bind` class.
+
+### VS Code language server caches across POM changes
+
+Both errors above showed as squiggles before Maven confirmed them — but the
+editor had also been showing *stale* errors from before the POM was fixed, since
+`java.autobuild.enabled: false` (set for memory reasons on an 8GB laptop) means
+it does not re-index on dependency changes.
+
+`Ctrl+Shift+P` → **Java: Clean Java Language Server Workspace**. And treat
+`./mvnw` as the authority, not the editor.
+
+---
+
+## Phase 2 complete
+
+| Area | Before | After |
+|---|---|---|
+| Schema | `ddl-auto: update`, no history | Flyway baselines, `validate`, indexed FKs |
+| Domain | `PaymentStatus` had no "unpaid" | `PENDING`, `OVERDUE`, `EventType.UPDATED` |
+| Docs | none | OpenAPI per service, gateway-aggregated UI, bearer scheme |
+| Auth | `Bearer faketoken` literal | HS256 JWT, `denyAll()` default |
+| PDF | iText 2.1.7 (2009, CVEs) | OpenPDF 2.0.3 |
+| Errors | five duplicated handlers | one base class, domain handlers per service |
+| Gateway | Boot 3.2.5 | Boot 3.5.3, Spring Cloud 2025.0.0 |
+| common | compiled to Java 8 | Java 21, Boot BOM |
+
+**Remaining before Phase 3:** the ADRs — auth trust boundary, retention removal,
+single-service deployment.
