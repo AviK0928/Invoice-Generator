@@ -1,70 +1,61 @@
 package com.example.invoice.invoice_service.scheduler;
 
 import com.example.invoice.common.enums.ArchiveEventType;
-import com.example.invoice.common.kafka.dto.ArchiveItemDTO;
-import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.invoice_service.entity.Invoice;
-import com.example.invoice.invoice_service.entity.LocalCustomer;
-import com.example.invoice.invoice_service.kafka.ArchiveEventProducer;
 import com.example.invoice.invoice_service.repository.InvoiceRepository;
-import com.example.invoice.invoice_service.repository.LocalCustomerRepository;
-import jakarta.transaction.Transactional;
+import com.example.invoice.invoice_service.service.InvoiceService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.List;
 
+/**
+ * Archives invoices older than the retention window.
+ *
+ * Delegates to InvoiceService rather than duplicating the archive logic. The
+ * previous version built its own event and published only to invoice-archived,
+ * so export-service never learned that an auto-archived invoice had been
+ * archived.
+ */
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class AutoArchiveScheduler {
 
     private final InvoiceRepository invoiceRepository;
-    private final LocalCustomerRepository customerRepository;
-    private final ArchiveEventProducer archiveEventProducer;
+    private final InvoiceService invoiceService;
 
-    @Scheduled(cron = "0 0 2 * * *") // runs every day at 2 AM
-    @Transactional
+    @Value("${invoice.auto-archive-after-months:6}")
+    private int archiveAfterMonths;
+
+    @Scheduled(cron = "${invoice.auto-archive-cron:0 0 2 * * *}")
+    @Transactional(readOnly = true)
     public void autoArchiveInvoices() {
-        LocalDate cutoffDate = LocalDate.now().minusMonths(1);
+        LocalDate cutoff = LocalDate.now().minusMonths(archiveAfterMonths);
+        List<Invoice> due = invoiceRepository.findByArchivedFalseAndInvoiceDateBefore(cutoff);
 
-        List<Invoice> invoicesToArchive = invoiceRepository
-                .findByArchivedFalseAndInvoiceDateBefore(cutoffDate);
-
-        for (Invoice invoice : invoicesToArchive) {
-            LocalCustomer customer = customerRepository.findById(invoice.getCustomerId())
-                    .orElse(null);
-
-            if (customer == null) {
-                log.warn("Skipping invoice {} due to missing customer", invoice.getInvoiceId());
-                continue;
-            }
-
-            invoice.setArchived(true);
-            invoiceRepository.save(invoice);
-
-            ArchiveEventDTO event = ArchiveEventDTO.builder()
-                    .invoiceId(invoice.getInvoiceId())
-                    .customerId(invoice.getCustomerId())
-                    .name(customer.getName())
-                    .email(customer.getEmail())
-                    .invoiceDate(invoice.getInvoiceDate())
-                    .paymentStatus(invoice.getPaymentStatus())
-                    .totalAmount(invoice.getTotalAmount())
-                    .items(invoice.getItems().stream().map(item ->
-                            new ArchiveItemDTO(
-                                    item.getDescription(),
-                                    item.getQuantity(),
-                                    item.getUnitPrice(),
-                                    item.getTotalPrice())
-                    ).toList())
-                    .eventType(ArchiveEventType.AUTO_ARCHIVE)
-                    .build();
-
-            archiveEventProducer.publish(event);
+        if (due.isEmpty()) {
+            return;
         }
+        log.info("Auto-archiving {} invoices older than {}", due.size(), cutoff);
+
+        int archived = 0;
+        for (Invoice invoice : due) {
+            try {
+                // Separate bean, so each call gets its own transaction. One
+                // failure must not roll back the whole run.
+                invoiceService.archiveInvoice(invoice.getInvoiceId(),
+                        ArchiveEventType.AUTO_ARCHIVE);
+                archived++;
+            } catch (Exception e) {
+                log.warn("Auto-archive failed for invoice {}", invoice.getInvoiceId(), e);
+            }
+        }
+        log.info("Auto-archived {} of {} invoices", archived, due.size());
     }
 }

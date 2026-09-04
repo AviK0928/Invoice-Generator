@@ -6,6 +6,7 @@ import com.example.invoice.common.enums.PaymentStatus;
 import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.common.kafka.dto.ArchiveItemDTO;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
+import com.example.invoice.common.kafka.dto.InvoiceItemDTO;
 import com.example.invoice.invoice_service.dto.InvoiceRequestDTO;
 import com.example.invoice.invoice_service.dto.InvoiceResponseDTO;
 import com.example.invoice.invoice_service.entity.Invoice;
@@ -13,8 +14,6 @@ import com.example.invoice.invoice_service.entity.InvoiceItem;
 import com.example.invoice.invoice_service.entity.LocalCustomer;
 import com.example.invoice.invoice_service.exception.InvalidCustomerException;
 import com.example.invoice.invoice_service.exception.InvoiceNotFoundException;
-import com.example.invoice.invoice_service.kafka.ArchiveEventProducer;
-import com.example.invoice.invoice_service.kafka.InvoiceEventProducer;
 import com.example.invoice.invoice_service.mapper.InvoiceMapper;
 import com.example.invoice.invoice_service.repository.InvoiceItemRepository;
 import com.example.invoice.invoice_service.repository.InvoiceRepository;
@@ -34,13 +33,16 @@ import java.util.List;
 @RequiredArgsConstructor
 public class InvoiceService {
 
+        private static final String AGGREGATE = "Invoice";
+        private static final String TOPIC_INVOICE_EVENTS = "invoice-events";
+        private static final String TOPIC_INVOICE_ARCHIVED = "invoice-archived";
+
         private final InvoiceRepository invoiceRepository;
         private final InvoiceItemRepository invoiceItemRepository;
         private final LocalCustomerRepository customerRepository;
         private final InvoiceMapper mapper;
         private final InvoiceContentHasher hasher;
-        private final InvoiceEventProducer producer;
-        private final ArchiveEventProducer archiveEventProducer;
+        private final OutboxWriter outbox;
 
         // ---------------------------------------------------------------- queries
 
@@ -63,11 +65,16 @@ public class InvoiceService {
                                 .map(mapper::toDTO);
         }
 
-        // ---------------------------------------------------------------- commands
+        // --------------------------------------------------------------- commands
 
         /**
          * Idempotent: two requests with identical content resolve to the same
          * invoice rather than creating a duplicate.
+         *
+         * Note the existing-invoice path records no event. "Already exists" and
+         * "downstream has it" are different questions, and this conflates them —
+         * a consumer that missed the original cannot recover it by retrying the
+         * create. See docs/adr/004.
          */
         @Transactional
         public InvoiceResponseDTO createInvoice(InvoiceRequestDTO dto) {
@@ -83,8 +90,23 @@ public class InvoiceService {
 
         @Transactional
         public void archiveInvoice(Long invoiceId) {
+                archiveInvoice(invoiceId, ArchiveEventType.MANUAL_ARCHIVE);
+        }
+
+        /**
+         * Shared by the API and the auto-archive scheduler, which differ only in
+         * the event type. Keeping one path means the two cannot drift — the
+         * scheduler previously omitted the invoice-events ARCHIVED publish
+         * entirely, so export-service never learned about auto-archived invoices.
+         */
+        @Transactional
+        public void archiveInvoice(Long invoiceId, ArchiveEventType archiveType) {
                 Invoice invoice = invoiceRepository.findWithItemsByInvoiceId(invoiceId)
                                 .orElseThrow(() -> new InvoiceNotFoundException(invoiceId));
+
+                if (Boolean.TRUE.equals(invoice.getArchived())) {
+                        return;
+                }
 
                 LocalCustomer customer = customerRepository.findById(invoice.getCustomerId())
                                 .orElseThrow(() -> new IllegalStateException(
@@ -94,8 +116,13 @@ public class InvoiceService {
                 invoice.setArchived(true);
                 invoiceRepository.save(invoice);
 
-                producer.publish(toEvent(invoice, customer, InvoiceEventType.ARCHIVED));
-                archiveEventProducer.publish(toArchiveEvent(invoice, customer));
+                outbox.record(AGGREGATE, invoiceId, TOPIC_INVOICE_EVENTS,
+                                InvoiceEventType.ARCHIVED.name(),
+                                toEvent(invoice, customer, InvoiceEventType.ARCHIVED));
+
+                outbox.record(AGGREGATE, invoiceId, TOPIC_INVOICE_ARCHIVED,
+                                archiveType.name(),
+                                toArchiveEvent(invoice, customer, archiveType));
         }
 
         @Transactional
@@ -116,7 +143,7 @@ public class InvoiceService {
                 invoiceRepository.deleteById(invoiceId);
         }
 
-        // ---------------------------------------------------------------- internals
+        // -------------------------------------------------------------- internals
 
         private InvoiceResponseDTO persistNew(InvoiceRequestDTO dto, LocalCustomer customer, String contentHash) {
                 BigDecimal totalAmount = dto.getItems().stream()
@@ -129,7 +156,12 @@ public class InvoiceService {
                 invoiceItemRepository.saveAll(items);
                 invoice.setItems(items);
 
-                producer.publish(toEvent(invoice, customer, InvoiceEventType.CREATED));
+                // The invoice and its event commit together. A broker outage now delays
+                // delivery instead of failing the write — this call previously threw
+                // "Send failed" and rolled the whole creation back.
+                outbox.record(AGGREGATE, invoice.getInvoiceId(), TOPIC_INVOICE_EVENTS,
+                                InvoiceEventType.CREATED.name(),
+                                toEvent(invoice, customer, InvoiceEventType.CREATED));
 
                 return mapper.toDTO(invoice);
         }
@@ -148,8 +180,7 @@ public class InvoiceService {
                                 .contentHash(invoice.getContentHash())
                                 .eventType(type)
                                 .items(invoice.getItems().stream()
-                                                .map(item -> com.example.invoice.common.kafka.dto.InvoiceItemDTO
-                                                                .builder()
+                                                .map(item -> InvoiceItemDTO.builder()
                                                                 .description(item.getDescription())
                                                                 .quantity(item.getQuantity())
                                                                 .unitPrice(item.getUnitPrice())
@@ -159,7 +190,8 @@ public class InvoiceService {
                                 .build();
         }
 
-        private ArchiveEventDTO toArchiveEvent(Invoice invoice, LocalCustomer customer) {
+        private ArchiveEventDTO toArchiveEvent(Invoice invoice, LocalCustomer customer,
+                        ArchiveEventType archiveType) {
                 return ArchiveEventDTO.builder()
                                 .invoiceId(invoice.getInvoiceId())
                                 .customerId(invoice.getCustomerId())

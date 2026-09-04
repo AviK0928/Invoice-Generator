@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.net.URI;
 import java.time.Instant;
@@ -87,5 +88,16 @@ public abstract class BaseExceptionHandler {
         pd.setType(URI.create(ERROR_TYPE_BASE + type));
         pd.setProperty("timestamp", Instant.now());
         return pd;
+    }
+
+    /**
+     * Spring throws this for an unmapped path. It extends ServletException, so
+     * without an explicit handler it lands in the catch-all and a typo in a URL
+     * is reported as a server error.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ProblemDetail handleNoResource(NoResourceFoundException ex) {
+        return problem(HttpStatus.NOT_FOUND, "Not found",
+                "No endpoint matches that path.", "no-such-endpoint");
     }
 }

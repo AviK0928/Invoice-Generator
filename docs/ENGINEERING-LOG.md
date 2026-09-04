@@ -1824,3 +1824,112 @@ it does not re-index on dependency changes.
 
 **Remaining before Phase 3:** the ADRs — auth trust boundary, retention removal,
 single-service deployment.
+
+---
+
+## Phase 3 — Transactional outbox
+
+### The problem, restated
+
+Three incidents in this log share one root cause: **the domain write and the
+event publish were two operations with no atomicity between them.**
+
+1. Kafka down meant `producer.publish()` threw inside `@Transactional`, rolling
+   back the entire creation. A messaging outage took down a core write path.
+2. Events published with no consumer listening were lost with no reconciliation
+   path.
+3. A failed event was silently discarded with the offset committed.
+
+The outbox fixes (1) outright and gives (2) a durable record. (3) is
+consumer-side and still open.
+
+### How it works
+
+`OutboxWriter.record()` is called inside the same transaction as the domain
+write. The invoice and the event describing it commit together or not at all.
+`OutboxDispatcher` polls afterwards and owns delivery.
+
+Delivery is **at-least-once**: a publish that succeeds but whose mark-published
+fails will republish on the next poll. Consumers must be idempotent — that is
+the trade, and it is the right one, because the alternative (marking published
+before confirming) loses events.
+
+### Four implementation details that matter
+
+**`FOR UPDATE SKIP LOCKED` in the claim query.** Without it, two instances
+dispatch the same batch and publish everything twice. With it, each claims a
+distinct set instead of blocking.
+
+Notably this **cannot** be expressed as `@Lock(LockModeType.PESSIMISTIC_WRITE)`
+on a native query — Spring Data applies lock modes through JPQL and throws at
+execution. The lock has to be in the SQL. Symptom was the dispatcher failing on
+every poll while the scheduling and transaction wiring were both fine.
+
+**Synchronous `send().get(5s)`.** An async send lets the transaction commit
+before delivery is known, marking rows published that never left.
+
+**`acks=all` plus `enable.idempotence`.** The dispatcher marks a row published
+when `get()` returns. Under weaker acks that return can precede replication, so
+a leader failure loses an event the outbox believes was delivered — quietly
+reintroducing the exact problem the outbox exists to solve.
+
+**Producer timeouts cut to 5s.** `max.block.ms` defaults to 60 seconds, which is
+what caused the earlier minute-long hang. The dispatcher retries every 2s
+anyway, so blocking a full minute only stalls the batch.
+
+### The retry budget was wrong, and testing caught it
+
+First run of the outage test: `attempts` reached the `max-attempts: 10` ceiling
+and the event was **abandoned about 20 seconds into the outage** — before Kafka
+finished restarting.
+
+Ten attempts at a 2-second poll is 20 seconds of tolerance. A broker restart
+takes longer than that. **The retry budget has to exceed realistic outage
+duration, or the outbox abandons events during exactly the incidents it exists
+to survive.**
+
+Fixed two ways. `max-attempts` raised to 300. And exponential backoff added via
+a `next_attempt_at` column, capped at five minutes — retrying every 2 seconds
+for the duration of an outage wastes cycles and hammers a broker that is still
+coming up. With backoff, 300 attempts spans hours rather than ten minutes.
+
+Second run: `attempts = 4` after 30 seconds, `next_attempt_at` in the future,
+and delivery on recovery.
+
+### Admin endpoints, because psql is not a procedure
+
+Recovering the first abandoned event meant `UPDATE outbox_events SET attempts=0`
+by hand. That is not an operational path.
+
+`GET /api/invoices/admin/outbox/status` and `POST .../requeue` make the backlog
+visible and recoverable. A backlog is the outbox's silent failure mode — the API
+keeps working perfectly while nothing reaches downstream.
+
+### Found along the way: unmapped paths returned 500
+
+`NoResourceFoundException` extends `ServletException`, so with no explicit
+handler it landed in `BaseExceptionHandler`'s catch-all. **Every mistyped URL on
+every service reported as a server error.** That is why an empty
+`OutboxAdminController.java` took three rounds to diagnose — a 500 says "the
+server broke," a 404 says "you asked for something that isn't there."
+
+Added a handler in `common`, which fixed all five services at once — the first
+concrete payoff from extracting the base class.
+
+Three outcomes now distinguish correctly:
+
+| Request | Result |
+|---|---|
+| `/api/invoices/foo/bar/baz` | 404 `no-such-endpoint` |
+| `/api/invoices/no-such-path` | 400 `invalid-parameter` — matches `/{invoiceId}`, wrong type |
+| `/api/invoices/99999` | 404 `invoice-not-found` |
+
+### AutoArchiveScheduler duplicated and diverged
+
+It built its own archive event and published only to `invoice-archived`, never
+the `invoice-events` ARCHIVED publish that `archiveInvoice` does. **An
+auto-archived invoice reached archive-service but export-service never learned
+it was archived** — a silent inconsistency between two paths that should be one.
+
+Now delegates to `InvoiceService.archiveInvoice(id, archiveType)`. Also fixed:
+the cutoff was `minusMonths(1)` while the README

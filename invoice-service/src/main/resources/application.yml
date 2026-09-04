@@ -61,6 +61,20 @@ springdoc:
   show-actuator: false
   default-produces-media-type: application/json
 
+# poll-interval is the best-case delivery latency. max-attempts must exceed
+# realistic outage duration — at 10 attempts this abandoned events after 20
+# seconds, less than a broker restart takes. With backoff, 300 attempts spans
+# several hours.
+outbox:
+  poll-interval-ms: ${OUTBOX_POLL_MS:2000}
+  batch-size: ${OUTBOX_BATCH_SIZE:100}
+  max-attempts: ${OUTBOX_MAX_ATTEMPTS:300}
+  cleanup-cron: ${OUTBOX_CLEANUP_CRON:0 0 3 * * *}
+
+invoice:
+  auto-archive-after-months: ${AUTO_ARCHIVE_MONTHS:6}
+  auto-archive-cron: ${AUTO_ARCHIVE_CRON:0 0 2 * * *}
+
 management:
   endpoints:
     web:
@@ -68,7 +82,7 @@ management:
         include: health,info
   endpoint:
     health:
-      show-details: never
+      show-details: when-authorized
       probes:
         enabled: true
 
