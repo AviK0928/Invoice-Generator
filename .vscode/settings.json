@@ -1,6 +1,6 @@
 {
   "java.jdt.ls.vmargs": "-XX:+UseSerialGC -Xmx512m -Xms128m",
-  "java.configuration.updateBuildConfiguration": "interactive",
+  "java.configuration.updateBuildConfiguration": "automatic",
   "java.autobuild.enabled": false,
   "java.maven.downloadSources": false,
   "java.import.maven.enabled": true,

@@ -32,6 +32,17 @@ spring:
       group-id: invoice-service-group
       auto-offset-reset: earliest
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
 logging:
   level:
     root: INFO

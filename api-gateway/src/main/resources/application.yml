@@ -39,6 +39,17 @@ spring:
       default-filters:
         - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_FIRST
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
 logging:
   level:
     root: INFO
