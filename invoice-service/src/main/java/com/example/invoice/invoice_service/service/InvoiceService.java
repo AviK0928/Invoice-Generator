@@ -1,9 +1,9 @@
 package com.example.invoice.invoice_service.service;
 
-import com.example.invoice.common.enums.InvoiceEventType;
-import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.common.enums.ArchiveEventType;
-
+import com.example.invoice.common.enums.InvoiceEventType;
+import com.example.invoice.common.enums.PaymentStatus;
+import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.common.kafka.dto.ArchiveItemDTO;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import com.example.invoice.invoice_service.dto.InvoiceRequestDTO;
@@ -11,6 +11,7 @@ import com.example.invoice.invoice_service.dto.InvoiceResponseDTO;
 import com.example.invoice.invoice_service.entity.Invoice;
 import com.example.invoice.invoice_service.entity.InvoiceItem;
 import com.example.invoice.invoice_service.entity.LocalCustomer;
+import com.example.invoice.invoice_service.exception.InvoiceNotFoundException;
 import com.example.invoice.invoice_service.kafka.ArchiveEventProducer;
 import com.example.invoice.invoice_service.kafka.InvoiceEventProducer;
 import com.example.invoice.invoice_service.mapper.InvoiceMapper;
@@ -18,14 +19,14 @@ import com.example.invoice.invoice_service.repository.InvoiceItemRepository;
 import com.example.invoice.invoice_service.repository.InvoiceRepository;
 import com.example.invoice.invoice_service.repository.LocalCustomerRepository;
 import com.example.invoice.invoice_service.util.InvoiceContentHasher;
-
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Optional;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 @Service
@@ -40,6 +41,33 @@ public class InvoiceService {
         private final InvoiceEventProducer producer;
         private final ArchiveEventProducer archiveEventProducer;
 
+        // ---------------------------------------------------------------- queries
+
+        @Transactional(readOnly = true)
+        public InvoiceResponseDTO getInvoice(Long invoiceId) {
+                return invoiceRepository.findWithItemsByInvoiceId(invoiceId)
+                                .map(mapper::toDTO)
+                                .orElseThrow(() -> new InvoiceNotFoundException(invoiceId));
+        }
+
+        @Transactional(readOnly = true)
+        public Page<InvoiceResponseDTO> listInvoices(Long customerId,
+                        PaymentStatus paymentStatus,
+                        Boolean archived,
+                        LocalDate fromDate,
+                        LocalDate toDate,
+                        Pageable pageable) {
+                return invoiceRepository
+                                .search(customerId, paymentStatus, archived, fromDate, toDate, pageable)
+                                .map(mapper::toDTO);
+        }
+
+        // ---------------------------------------------------------------- commands
+
+        /**
+         * Idempotent: two requests with identical content resolve to the same
+         * invoice rather than creating a duplicate.
+         */
         @Transactional
         public InvoiceResponseDTO createInvoice(InvoiceRequestDTO dto) {
                 if (!customerRepository.existsById(dto.getCustomerId())) {
@@ -48,53 +76,76 @@ public class InvoiceService {
 
                 String contentHash = hasher.hash(dto);
 
-                // Idempotent create: an identical invoice is the same invoice, not a new one.
-                Optional<Invoice> existing = invoiceRepository.findByContentHash(contentHash);
-                if (existing.isPresent()) {
-                        return mapper.toDTO(existing.get());
-                }
-
-                BigDecimal totalAmount = dto.getItems().stream()
-                                .map(item -> item.getUnitPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-                Invoice savedInvoice = invoiceRepository.save(mapper.toEntity(dto, totalAmount, contentHash));
-
-                List<InvoiceItem> items = mapper.toItemEntities(dto.getItems(), savedInvoice);
-                invoiceItemRepository.saveAll(items);
-                savedInvoice.setItems(items);
-
-                producer.publish(InvoiceEventDTO.builder()
-                                .invoiceId(savedInvoice.getInvoiceId())
-                                .customerId(savedInvoice.getCustomerId())
-                                .totalAmount(savedInvoice.getTotalAmount())
-                                .paymentStatus(savedInvoice.getPaymentStatus())
-                                .eventType(InvoiceEventType.CREATED)
-                                .build());
-
-                return mapper.toDTO(savedInvoice);
+                return invoiceRepository.findByContentHash(contentHash)
+                                .map(mapper::toDTO)
+                                .orElseGet(() -> persistNew(dto, contentHash));
         }
 
         @Transactional
         public void archiveInvoice(Long invoiceId) {
-                Invoice invoice = invoiceRepository.findById(invoiceId)
-                                .orElseThrow(() -> new IllegalArgumentException("Invoice not found"));
+                Invoice invoice = invoiceRepository.findWithItemsByInvoiceId(invoiceId)
+                                .orElseThrow(() -> new InvoiceNotFoundException(invoiceId));
+
                 LocalCustomer customer = customerRepository.findById(invoice.getCustomerId())
-                                .orElseThrow(() -> new IllegalStateException("Customer not found"));
+                                .orElseThrow(() -> new IllegalStateException(
+                                                "Customer " + invoice.getCustomerId() + " missing for invoice "
+                                                                + invoiceId));
+
                 invoice.setArchived(true);
                 invoiceRepository.save(invoice);
 
-                InvoiceEventDTO invoiceEvent = InvoiceEventDTO.builder()
+                producer.publish(toEvent(invoice, InvoiceEventType.ARCHIVED));
+                archiveEventProducer.publish(toArchiveEvent(invoice, customer));
+        }
+
+        @Transactional
+        public void deleteInvoice(Long invoiceId) {
+                if (!invoiceRepository.existsById(invoiceId)) {
+                        throw new InvoiceNotFoundException(invoiceId);
+                }
+                deleteInvoiceById(invoiceId);
+        }
+
+        /**
+         * Unchecked delete used by the Kafka delete-event consumer, where the
+         * invoice may already be gone and that is not an error.
+         */
+        @Transactional
+        public void deleteInvoiceById(Long invoiceId) {
+                invoiceItemRepository.deleteByInvoice_InvoiceId(invoiceId);
+                invoiceRepository.deleteById(invoiceId);
+        }
+
+        // ---------------------------------------------------------------- internals
+
+        private InvoiceResponseDTO persistNew(InvoiceRequestDTO dto, String contentHash) {
+                BigDecimal totalAmount = dto.getItems().stream()
+                                .map(item -> item.getUnitPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
+                                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+                Invoice invoice = invoiceRepository.save(mapper.toEntity(dto, totalAmount, contentHash));
+
+                List<InvoiceItem> items = mapper.toItemEntities(dto.getItems(), invoice);
+                invoiceItemRepository.saveAll(items);
+                invoice.setItems(items);
+
+                producer.publish(toEvent(invoice, InvoiceEventType.CREATED));
+
+                return mapper.toDTO(invoice);
+        }
+
+        private InvoiceEventDTO toEvent(Invoice invoice, InvoiceEventType type) {
+                return InvoiceEventDTO.builder()
                                 .invoiceId(invoice.getInvoiceId())
                                 .customerId(invoice.getCustomerId())
                                 .totalAmount(invoice.getTotalAmount())
                                 .paymentStatus(invoice.getPaymentStatus())
-                                .eventType(InvoiceEventType.ARCHIVED)
+                                .eventType(type)
                                 .build();
+        }
 
-                producer.publish(invoiceEvent);
-
-                ArchiveEventDTO archiveEvent = ArchiveEventDTO.builder()
+        private ArchiveEventDTO toArchiveEvent(Invoice invoice, LocalCustomer customer) {
+                return ArchiveEventDTO.builder()
                                 .invoiceId(invoice.getInvoiceId())
                                 .customerId(invoice.getCustomerId())
                                 .name(customer.getName())
@@ -111,13 +162,5 @@ public class InvoiceService {
                                                 .toList())
                                 .eventType(ArchiveEventType.MANUAL_ARCHIVE)
                                 .build();
-
-                archiveEventProducer.publish(archiveEvent);
-        }
-
-        @Transactional
-        public void deleteInvoiceById(Long invoiceId) {
-                invoiceItemRepository.deleteByInvoice_InvoiceId(invoiceId);
-                invoiceRepository.deleteById(invoiceId);
         }
 }
