@@ -355,3 +355,319 @@ invoice. Add `PENDING` and `OVERDUE` before building
    phase-end integration checks, not the working loop.
 5. **A healthy container is not a working service.** `/actuator/health` returning
    UP proved nothing about whether an invoice could be created.
+
+### Discovery: `@Data` on JPA entities is a latent stack overflow
+
+`Invoice` has `@OneToMany List<InvoiceItem> items`; `InvoiceItem` has
+`@ManyToOne Invoice invoice`. Lombok's `@Data` generates `toString`, `equals`
+and `hashCode` across all fields, so `invoice.toString()` walks its items, each
+item walks back to its invoice, and the stack blows.
+
+It had never fired only because nothing logged an entity. One `log.debug("{}",
+invoice)` would have done it. Replaced with `@Getter @Setter` on `Invoice`,
+`InvoiceItem` and `LocalCustomer`.
+
+**Lesson:** `@Data` is fine on DTOs and wrong on entities with bidirectional
+relationships. The failure mode is a crash in whatever code first tries to log.
+
+### Root cause: the API had no way to read anything back
+
+`InvoiceController` had exactly two endpoints — create and archive. No get by
+id, no list. `deleteInvoiceById` existed in the service with no route reaching
+it. `CustomerController` was the same shape: create and delete, no reads.
+
+An API you can write to but not read from cannot be demonstrated. Added:
+
+- `GET /api/invoices` — paged, filterable by customer, status, archived flag and
+  date range
+- `GET /api/invoices/{id}`
+- `DELETE /api/invoices/{id}` — routed the orphaned service method
+
+Three implementation notes worth keeping:
+
+- **`@EntityGraph(attributePaths = "items")` on the single fetch.** Without it,
+  loading an invoice and then its items is two queries; a list of twenty is
+  twenty-one. Classic N+1.
+- **`CAST(:fromDate AS date) IS NULL`** in the search query. Postgres cannot
+  infer the type of a null bind parameter and throws `could not determine data
+  type` without the cast. The `:param IS NULL OR ...` pattern lets one method
+  serve every combination of optional filters.
+- **`@Transactional(readOnly = true)`** on queries. Hibernate skips
+  dirty-checking and the driver can use a read-only transaction. Free.
+
+Create now returns **201 with a `Location` header** rather than 200. Noticed
+during the earlier customer test that `POST /api/customers` returned the request
+DTO with no id at all — the client had no way to learn what it had just made.
+
+### Discovery: `IllegalArgumentException` is too generic to map
+
+`createInvoice` threw `IllegalArgumentException` for an unknown customer. Half
+the JDK throws that, so a `@ExceptionHandler` for it would catch unrelated
+failures and mislabel them as client errors. Replaced with a domain-specific
+`InvalidCustomerException`.
+
+**Lesson:** exceptions you intend to map to HTTP statuses must be types you own.
+
+### Error contract: RFC 9457 Problem Details
+
+Replaced Spring's default error page with `@RestControllerAdvice` returning
+`ProblemDetail` (built into Spring 6, no dependency).
+
+| Exception | Status | Reasoning |
+|---|---|---|
+| `InvoiceNotFoundException` | 404 | |
+| `InvalidCustomerException` | **422** | JSON parsed and every field was well-formed; the request was semantically wrong, not malformed |
+| `MethodArgumentNotValidException` | 400 | plus a per-field `errors` map |
+| `HttpMessageNotReadableException` | 400 | bad enum values, type mismatches |
+| `DataIntegrityViolationException` | **409** | safety net for the `contentHash` unique index if two identical creates race past the pre-check |
+| `Exception` | 500 | full detail logged server-side, bland message returned |
+
+The 409 case is the interesting one. `createInvoice` checks
+`findByContentHash` before inserting, but that check and the insert are not
+atomic under concurrency. The unique index is the real guarantee; the handler
+turns the resulting constraint violation into a sensible status instead of a
+500.
+
+### Rule added: verify the smallest thing that answers the question
+
+Four tiers, and the first two are where the work happens:
+
+| Tier | Command | Cost | Answers |
+|---|---|---|---|
+| Compile | `./mvnw -pl <svc> -am install -DskipTests` | 40s, 1 JVM | most mistakes |
+| One service | `./run.sh <svc>` | 3 containers | endpoints, persistence, publishing |
+| Two services | two `./run.sh` terminals | 4 containers | one event crossing a boundary |
+| Full stack | `docker compose up -d` | 8 containers, 90s | phase-end integration only |
+
+Running the full stack "just to be safe" costs 90 seconds of startup, pegs both
+cores, burns Codespace hours, and tells you nothing one service wouldn't have.
+When it does break you get eight containers of logs instead of one.
+
+`run.sh` and `seed.sh` exist to make tier 2 a single command — env loaded from
+`.env`, infra waited on, `KAFKA_BOOTSTRAP_SERVERS` pointed at the host listener.
+
+
+### Discovery: `@Data` on JPA entities is a latent stack overflow
+
+`Invoice` has `@OneToMany List<InvoiceItem> items`; `InvoiceItem` has
+`@ManyToOne Invoice invoice`. Lombok's `@Data` generates `toString`, `equals`
+and `hashCode` across all fields, so `invoice.toString()` walks its items, each
+item walks back to its invoice, and the stack blows.
+
+It had never fired only because nothing logged an entity. One
+`log.debug("{}", invoice)` would have done it. Replaced with `@Getter @Setter`
+on `Invoice`, `InvoiceItem` and `LocalCustomer`.
+
+**Lesson:** `@Data` is fine on DTOs and wrong on entities with bidirectional
+relationships. The failure mode is a crash in whatever code first tries to log.
+
+---
+
+### Root cause: the API had no way to read anything back
+
+`InvoiceController` had exactly two endpoints — create and archive. No get by
+id, no list. `deleteInvoiceById` existed in the service with no route reaching
+it. `CustomerController` was the same shape: create and delete, no reads.
+
+An API you can write to but not read from cannot be demonstrated. Added:
+
+- `GET /api/invoices` — paged, filterable by customer, status, archived flag and
+  date range
+- `GET /api/invoices/{id}`
+- `DELETE /api/invoices/{id}` — routed the orphaned service method
+
+Three implementation notes worth keeping:
+
+- **`@EntityGraph(attributePaths = "items")` on the single fetch.** Without it,
+  loading an invoice and then its items is two queries; a list of twenty is
+  twenty-one. Classic N+1.
+- **`CAST(:fromDate AS date) IS NULL`** in the search query. Postgres cannot
+  infer the type of a null bind parameter and throws `could not determine data
+  type` without the cast. The `:param IS NULL OR ...` pattern lets one method
+  serve every combination of optional filters.
+- **`@Transactional(readOnly = true)`** on queries. Hibernate skips
+  dirty-checking and the driver can use a read-only transaction. Free.
+
+Create now returns **201 with a `Location` header** rather than 200. Noticed
+during the earlier customer test that `POST /api/customers` returned the request
+DTO with no id at all — the client had no way to learn what it had just made.
+
+---
+
+### Discovery: `IllegalArgumentException` is too generic to map
+
+`createInvoice` threw `IllegalArgumentException` for an unknown customer. Half
+the JDK throws that, so a `@ExceptionHandler` for it would catch unrelated
+failures and mislabel them as client errors. Replaced with a domain-specific
+`InvalidCustomerException`.
+
+**Lesson:** exceptions you intend to map to HTTP statuses must be types you own.
+
+---
+
+### Error contract: RFC 9457 Problem Details
+
+Replaced Spring's default error page with `@RestControllerAdvice` returning
+`ProblemDetail` (built into Spring 6, no dependency).
+
+| Exception | Status | Reasoning |
+|---|---|---|
+| `InvoiceNotFoundException` | 404 | |
+| `InvalidCustomerException` | **422** | JSON parsed and every field was well-formed; the request was semantically wrong, not malformed |
+| `MethodArgumentNotValidException` | 400 | plus a per-field `errors` map |
+| `HttpMessageNotReadableException` | 400 | bad enum values, type mismatches |
+| `DataIntegrityViolationException` | **409** | safety net for the `contentHash` unique index if two identical creates race past the pre-check |
+| `Exception` | 500 | full detail logged server-side, bland message returned |
+
+The 409 case is the interesting one. `createInvoice` checks `findByContentHash`
+before inserting, but that check and the insert are not atomic under
+concurrency. The unique index is the real guarantee; the handler turns the
+resulting constraint violation into a sensible status instead of a 500.
+
+Before: a bad enum value returned a 60-frame stack trace exposing the filter
+chain, package structure and framework versions. After: a four-field JSON body
+with no internals.
+
+---
+
+### Discovery: three of five controllers were unreachable through the gateway
+
+`ImportController` was at `/import`, `ExportController` at `/api/export`, and
+`ArchiveController` at `/api/archive` — against gateway routes `/api/imports`,
+`/api/exports` and `/api/archives`. No `StripPrefix` filter is applied, so the
+gateway forwards the path verbatim and the service 404s.
+
+None of this is a compile error, and each service works fine when called
+directly on its own port. Only requests through the gateway fail — which is the
+only way a real client would call it.
+
+```bash
+grep -rn "@RequestMapping" --include=*Controller.java .
+```
+
+Run that against the gateway's route predicates whenever either side changes.
+It caught the third mismatch (`/api/archive`) that had been missed by eye.
+
+**Diagnosing a 404 through a gateway:** an empty body with no security headers
+means the gateway found no route. A body, or Spring Security's headers
+(`X-Frame-Options`, `X-Content-Type-Options`), means the request reached the
+service and the service returned the 404. Confirm by calling the service
+directly over the compose network:
+
+```bash
+docker compose exec api-gateway curl -s -o /dev/null -w "%{http_code}\n" \
+  http://export-service:8083/api/exports/invoice/9
+```
+
+---
+
+### Discovery: `ArchiveScheduler` had never run
+
+`ArchiveServiceApplication` was missing `@EnableScheduling`, so
+`purgeArchivedInvoices()` was dead code. invoice-service and export-service both
+have it, which is why the omission went unnoticed — the annotation is per
+application class, not global.
+
+---
+
+### Discovery: the import pipeline was switched off
+
+`ImportService` had `//eventProducer.publish(event)` commented out. CSV import
+parsed the file and saved to `importdb`, then stopped. Imported invoices never
+reached invoice-service — which is the entire purpose of the service.
+
+---
+
+### Discovery: events published with no consumer running are lost
+
+Invoice 9 was created while invoice-service ran natively (host listener
+`localhost:29092`) with the rest of the stack down. `exportdb` and `archivedb`
+have no record of it and never will — export-service's consumer group had no
+committed offset at the time, and `auto-offset-reset: earliest` only helps if
+the broker still holds the message. The Kafka container has no volume, so
+`docker compose down` discards the log entirely.
+
+Not a bug in itself — this is what eventual consistency looks like when delivery
+gaps happen. But it exposes the real problem: **the same invoice is modelled
+four times in four databases, synced only by Kafka, with no reconciliation
+path.** Once they diverge, nothing brings them back. There is no "rebuild
+export-service's view from invoice-service" operation.
+
+This is the argument for the consolidation in Phase 5, not just the outbox in
+Phase 3. An outbox guarantees the event is *published*; it does nothing about
+four copies of the same data drifting apart.
+
+---
+
+### Rule added: verify the smallest thing that answers the question
+
+Four tiers, and the first two are where the work happens:
+
+| Tier | Command | Cost | Answers |
+|---|---|---|---|
+| Compile | `./mvnw -pl <svc> -am install -DskipTests` | 40s, 1 JVM | most mistakes |
+| One service | `./run.sh <svc>` | 3 containers | endpoints, persistence, publishing |
+| Two services | two `./run.sh` terminals | 4 containers | one event crossing a boundary |
+| Full stack | `docker compose up -d` | 8 containers, 90s | phase-end integration only |
+
+Running the full stack "just to be safe" costs 90 seconds of startup, pegs both
+cores, burns Codespace hours, and tells you nothing one service wouldn't have.
+When it does break you get eight containers of logs instead of one.
+
+The exception is any change that crosses a service boundary — gateway routes,
+event contracts, shared DTOs. A single-service test structurally cannot catch
+those, which is exactly how three broken controller mappings survived.
+
+`run.sh` and `seed.sh` exist to make tier 2 a single command: env loaded from
+`.env`, infra waited on, `KAFKA_BOOTSTRAP_SERVERS` pointed at the host listener.
+
+---
+
+### Minor: table naming is inconsistent across services
+
+`invoices` / `local_customers` (plural) in invoice-service, `export_invoice` /
+`export_customer` (singular) in export-service, `archived_invoices` (plural) in
+archive-service. Harmless but sloppy. Settle on plural when Flyway replaces
+`ddl-auto` in Phase 2 — the schema gets written explicitly there anyway, so it
+costs nothing then and would cost a rename migration now.
+
+---
+
+## Phase 1 status
+
+**Done**
+
+- `contentHash` populated; creation is idempotent
+- Read endpoints with pagination, filtering, and an entity graph
+- `@Getter`/`@Setter` replacing `@Data` on entities
+- RFC 9457 error contract across the invoice API
+- `@EnableScheduling` on archive-service
+- All five controller paths aligned with gateway routes
+- Import event publish re-enabled
+
+**Remaining**
+
+1. **Filesystem writes.** export-service and `BackupScheduler` write to
+   `java.io.tmpdir` and `new File("backups")`. Render's disk is ephemeral and
+   restarts frequently, so both silently lose data. Needs
+   `StreamingResponseBody`. This is the last thing that breaks outright on
+   deployment.
+2. **The other four services** still have the shape invoice-service started
+   with:
+
+   | Service | Endpoints | Missing |
+   |---|---|---|
+   | customer | POST, DELETE | all reads, error handling |
+   | export | 2 GETs | error handling, streaming |
+   | import | 1 POST | reads, error handling, upload validation |
+   | archive | POST, GET check | list/search, error handling |
+
+   `GET /api/customers/1` returns 405 — there is no GET mapping at all.
+3. **`ImportController` returns 500 for a missing file.** It catches everything
+   indiscriminately and reports every failure as a server error. Should be 400.
+4. **`PaymentStatus` has only `SUCCESSFUL` and `FAILED`.** An invoicing system
+   with no way to express *unpaid* or *overdue* cannot represent the normal
+   state of an invoice. Add `PENDING` and `OVERDUE` before building
+   `PATCH /api/invoices/{id}/status`.
+5. **Unbounded CSV parsing** in `ImportService` — no file size cap, no MIME
+   check, `.getRecords()` reads the whole file into memory.

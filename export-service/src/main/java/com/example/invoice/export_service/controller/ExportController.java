@@ -18,7 +18,7 @@ import java.time.YearMonth;
 import java.util.Optional;
 
 @RestController
-@RequestMapping("/api/export")
+@RequestMapping("/api/exports")
 @RequiredArgsConstructor
 public class ExportController {
 
@@ -28,8 +28,7 @@ public class ExportController {
 
     @GetMapping("/monthly-zip")
     public ResponseEntity<Resource> downloadMonthlyZip(
-            @RequestParam("month") @DateTimeFormat(pattern = "yyyy-MM") YearMonth month
-    ) throws Exception {
+            @RequestParam("month") @DateTimeFormat(pattern = "yyyy-MM") YearMonth month) throws Exception {
         File tempDir = new File(System.getProperty("java.io.tmpdir"));
         File zipFile = exportService.generateMonthlyZip(month, tempDir);
 

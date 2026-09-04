@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 @RestController
-@RequestMapping("/import")
+@RequestMapping("/api/imports")
 @RequiredArgsConstructor
 public class ImportController {
 
