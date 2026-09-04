@@ -19,22 +19,47 @@ spring:
       maximum-pool-size: ${DB_POOL_SIZE:5}
       connection-timeout: 20000
 
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
-    open-in-view: false
-
+  # Flyway owns the schema. Hibernate only checks that the entities match what
+  # the migrations produced, and fails startup if they diverge.
   flyway:
     enabled: true
     baseline-on-migrate: false
     validate-on-migrate: true
+
+  jpa:
+    hibernate:
+      ddl-auto: ${DDL_AUTO:validate}
+    show-sql: false
+    open-in-view: false
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: export-service-group
       auto-offset-reset: earliest
+
+# Monthly archives are assembled in memory inside a read-only transaction —
+# StreamingResponseBody writes after the transaction closes, which fails with
+# open-in-view disabled. This bounds worst-case heap on a 512MB instance;
+# exceeding it returns 413 rather than an OOM.
+export:
+  max-invoices: ${EXPORT_MAX_INVOICES:500}
+
+# The spec path is prefixed with this service's API namespace so the gateway's
+# existing /api/exports/** route carries it unchanged.
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api/exports/v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    doc-expansion: none
+  show-actuator: false
+  default-produces-media-type: application/json
 
 management:
   endpoints:
@@ -62,3 +87,16 @@ spring:
 logging:
   level:
     com.example.invoice: DEBUG
+
+---
+# Documentation is a development and demo aid. On a public deployment it
+# advertises every endpoint and payload shape to anyone who finds the URL.
+spring:
+  config:
+    activate:
+      on-profile: cloud
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:false}
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:false}

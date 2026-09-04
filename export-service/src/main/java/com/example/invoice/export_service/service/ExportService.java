@@ -9,6 +9,7 @@ import com.example.invoice.export_service.repository.ExportInvoiceRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.io.ByteArrayOutputStream;
 import java.time.YearMonth;
@@ -25,8 +26,8 @@ public class ExportService {
      * Cap on invoices per export. The archive is assembled in memory (see
      * below), so this bounds worst-case heap use on a 512MB instance.
      */
-    private static final int MAX_INVOICES_PER_EXPORT = 500;
-
+    @Value("${export.max-invoices:500}")
+    private int maxInvoices;
     private final ExportInvoiceRepository exportInvoiceRepository;
     private final ExportInvoiceItemRepository exportInvoiceItemRepository;
     private final PdfExportService pdfExportService;
@@ -49,8 +50,8 @@ public class ExportService {
         List<ExportInvoice> invoices = exportInvoiceRepository
                 .findByInvoiceDateBetween(month.atDay(1), month.atEndOfMonth());
 
-        if (invoices.size() > MAX_INVOICES_PER_EXPORT) {
-            throw new ExportTooLargeException(month, invoices.size(), MAX_INVOICES_PER_EXPORT);
+        if (invoices.size() > maxInvoices) {
+            throw new ExportTooLargeException(month, invoices.size(), maxInvoices);
         }
 
         ByteArrayOutputStream zipBytes = new ByteArrayOutputStream();

@@ -44,6 +44,23 @@ spring:
       group-id: invoice-service-group
       auto-offset-reset: earliest
 
+# The spec path is prefixed with this service's API namespace so the gateway's
+# existing /api/invoices/** route carries it unchanged. Without the prefix the
+# gateway would need a dedicated route per service just for documentation.
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api/invoices/v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    doc-expansion: none
+  show-actuator: false
+  default-produces-media-type: application/json
+
 management:
   endpoints:
     web:
@@ -73,3 +90,18 @@ spring:
 logging:
   level:
     com.example.invoice: DEBUG
+
+---
+# Documentation is a development and demo aid. On a public deployment it
+# advertises every endpoint and payload shape to anyone who finds the URL.
+# Disabled by default in the cloud profile; flip SPRINGDOC_ENABLED to true when
+# the deployed API is meant to be browsable.
+spring:
+  config:
+    activate:
+      on-profile: cloud
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:false}
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:false}

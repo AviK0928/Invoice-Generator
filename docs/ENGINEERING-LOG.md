@@ -1545,3 +1545,70 @@ checksum per migration and fails with `Migration checksum mismatch` otherwise.
 Same class of problem as the Kafka cluster metadata and the Postgres init
 script: **stateful containers cache their bootstrap state, and a config change
 alone does not reach them.**
+
+---
+
+## Phase 2 (continued) — OpenAPI
+
+### Spec paths are namespaced so the gateway routes carry them
+
+The obvious setup puts each spec at `/v3/api-docs`, which the gateway's
+`/api/invoices/**` route does not match — so aggregating five services would
+need five extra routes purely for documentation.
+
+Instead each service serves its spec under its own API prefix:
+
+```yaml
+springdoc:
+  api-docs:
+    path: /api/invoices/v3/api-docs
+```
+
+The existing route carries it unchanged. The gateway serves no spec of its own
+(it has no endpoints) and hosts only the UI, with a dropdown fetching all five
+through the normal routes. One page for the whole API, zero extra routing.
+
+### Two settings that are not cosmetic
+
+**`consumes = MediaType.MULTIPART_FORM_DATA_VALUE`** on the import endpoint.
+Without it Swagger UI renders a plain text box instead of a file picker and the
+endpoint cannot be exercised from the browser at all. The column list is
+documented in `@Parameter` — that is exactly what cost two rounds of failed test
+files during Phase 1.
+
+**An explicit `servers` list** in `OpenApiConfig`. Springdoc otherwise infers the
+base URL from the incoming request, so "Try it out" from the gateway-hosted UI
+targets the wrong host. Declaring both the gateway path and the direct port lets
+the UI switch between them.
+
+### Docs default to off in the cloud profile
+
+A public spec advertises every endpoint, payload shape and validation rule to
+anyone who finds the URL. The `cloud` profile disables both the spec and the UI
+behind `SPRINGDOC_ENABLED`.
+
+For this project the answer is almost certainly to turn it **on** in Render — a
+live Swagger UI is the most clickable thing the deployment will have. But
+defaulting to off means exposure is a decision rather than an accident.
+
+### More config externalised
+
+`export.max-invoices` joined `import.max-rows` as a property rather than a
+constant. Both are memory bounds, and a 512MB Render instance wants lower values
+than an 8GB Codespace. A limit that requires a rebuild to change is not an
+operational control.
+
+### Codespace disk exhaustion
+
+`docker compose up --build` warned at under 10% free. Six images rebuilt many
+times leaves every superseded layer on disk; BuildKit's cache is usually the
+largest consumer.
+
+```bash
+docker image prune -f
+docker builder prune -f     # usually the big win
+docker system prune -af     # heavier: re-downloads base images afterwards
+```
+
+Named volumes survive all of these, so `pgdata` is safe. Habit worth keeping:
+`docker compose down` when stopping work, and prune the builder periodically.

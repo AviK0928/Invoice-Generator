@@ -19,16 +19,18 @@ spring:
       maximum-pool-size: ${DB_POOL_SIZE:5}
       connection-timeout: 20000
 
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
-    open-in-view: false
-
+  # Flyway owns the schema. Hibernate only checks that the entities match what
+  # the migrations produced, and fails startup if they diverge.
   flyway:
     enabled: true
     baseline-on-migrate: false
     validate-on-migrate: true
+
+  jpa:
+    hibernate:
+      ddl-auto: ${DDL_AUTO:validate}
+    show-sql: false
+    open-in-view: false
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -52,6 +54,23 @@ spring:
 # caught.
 import:
   max-rows: ${IMPORT_MAX_ROWS:10000}
+
+# The spec path is prefixed with this service's API namespace so the gateway's
+# existing /api/imports/** route carries it unchanged. Without the prefix the
+# gateway would need a dedicated route per service just for documentation.
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api/imports/v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    doc-expansion: none
+  show-actuator: false
+  default-produces-media-type: application/json
 
 management:
   endpoints:
@@ -79,3 +98,18 @@ spring:
 logging:
   level:
     com.example.invoice: DEBUG
+
+---
+# Documentation is a development and demo aid. On a public deployment it
+# advertises every endpoint and payload shape to anyone who finds the URL.
+# Disabled by default in the cloud profile; flip SPRINGDOC_ENABLED to true when
+# the deployed API is meant to be browsable.
+spring:
+  config:
+    activate:
+      on-profile: cloud
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:false}
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:false}
