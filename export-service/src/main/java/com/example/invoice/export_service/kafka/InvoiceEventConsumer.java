@@ -12,7 +12,7 @@ public class InvoiceEventConsumer {
 
     private final InvoiceEventHandlerService handlerService;
 
-    @KafkaListener(topics = "invoice-events", groupId = "export-service-group")
+    @KafkaListener(topics = "invoice-events", groupId = "export-service-group", containerFactory = "invoiceEventKafkaListenerFactory")
     public void consumeInvoiceEvent(InvoiceEventDTO event) throws Exception {
         handlerService.processInvoiceEvent(event);
     }
