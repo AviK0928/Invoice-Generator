@@ -1,0 +1,14 @@
+.git
+.gitignore
+.gitattributes
+**/target
+**/.idea
+**/*.iml
+.devcontainer
+.github
+.vscode
+.env
+k8s/
+docs/
+*.md
+!README.md
