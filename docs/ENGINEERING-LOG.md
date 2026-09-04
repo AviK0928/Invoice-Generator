@@ -1126,3 +1126,127 @@ per-invoice rather than per-customer.
 
 Not urgent — import is a boundary that accepts whatever the file says — but the
 CSV contract should carry the customer once, not per row.
+
+---
+
+## Phase 1 (continued) — customer-service
+
+### Root cause: the API returned no identifier
+
+`CustomerResponseDTO` had exactly two fields, `name` and `email`. No
+`customerId`. So `POST /api/customers` echoed the request back and the client
+had no way to learn what it had just created — which is why the very first test
+in this project returned `{"name":"Test Co","email":"test@example.com"}` while
+the database had assigned id 1.
+
+The service also had **no GET mapping at all**. Customers could be created and
+deleted but never listed or fetched. Combined with the missing id, a client
+could create a customer and then never refer to it again.
+
+Added `GET /api/customers` (paged, searchable), `GET /api/customers/{id}`,
+`PUT /api/customers/{id}`, and changed create to return **201 with a `Location`
+header**.
+
+### Fixed alongside
+
+- `throw new RuntimeException("Customer not found")` → `CustomerNotFoundException`,
+  mapped to 404. Same reasoning as `IllegalArgumentException` in invoice-service:
+  an exception you intend to map to a status must be a type you own.
+- Duplicate email 500'd on the unique index → `DuplicateEmailException` → 409,
+  with `DataIntegrityViolationException` retained as the race-condition net.
+- `jakarta.transaction.Transactional` → Spring's.
+- `@Data` → `@Getter`/`@Setter` on the entity, for consistency with the others.
+- `CustomerMapper` given a private constructor — it is a static utility class.
+
+### The bug that took three attempts: null parameters in JPQL
+
+`GET /api/customers` (no search term) returned 500 while
+`?search=acme` worked.
+
+First guess: the same `CAST(:param AS type) IS NULL` issue fixed in
+`InvoiceRepository`. Applied it. Still failed.
+
+The actual error, once I stopped guessing and read the trace:
+ERROR: function lower(bytea) does not exist
+select ... where cast(? as text) is null
+or lower(c1_0.name) like lower(('%'||?||'%'))
+or lower(c1_0.email) like lower(('%'||?||'%'))
+
+
+**Three** bind occurrences of `:search`. The CAST typed the first one; the two
+inside `LOWER(CONCAT(...))` were still untyped nulls, and Postgres inferred
+`bytea`. The invoice-service query used its parameter *once*, which is why the
+same fix worked there and not here.
+
+Real fix: bind the parameter a single time and build the pattern in Java.
+
+```java
+// repository
+WHERE :search IS NULL
+   OR LOWER(c.name)  LIKE :search
+   OR LOWER(c.email) LIKE :search
+
+// service
+String pattern = (search == null || search.isBlank())
+        ? null : "%" + search.toLowerCase() + "%";
+```
+
+Better on three counts: `LOWER()` no longer touches the parameter so there is
+nothing to mistype, blank strings now mean "no filter" instead of matching
+`%%`, and the wildcard handling lives in one visible place.
+
+**Lesson — the one worth keeping.** I pattern-matched a previous fix onto a
+similar-looking symptom and was wrong twice before reading the stack trace. The
+`@ExceptionHandler(Exception.class)` was logging the full exception the whole
+time. *A generic error response to the client does not mean a generic error in
+the logs* — the catch-all exists precisely so the detail survives server-side.
+Read it first.
+
+### Contract gap: EventType has no UPDATED
+
+`updateCustomer` publishes `EventType.CREATED`. Consumers treat CREATED as an
+upsert so it functions, but the event lies about what happened. Add `UPDATED` to
+`EventType` in `common` at the same time as `PENDING` and `OVERDUE` on
+`PaymentStatus`.
+
+### Known limitation: search is a sequential scan
+
+`LIKE '%term%'` on two lowercased columns cannot use a B-tree index. Fine at
+this data size; the honest fixes are a `pg_trgm` GIN index or full-text search,
+either of which belongs with the Flyway migrations in Phase 2 rather than being
+bolted on now.
+
+---
+
+## Phase 1 status
+
+**Done**
+
+- invoice-service: contentHash + idempotency, reads, errors, complete event
+- export-service: all filesystem writes removed
+- import-service: bounded uploads, per-invoice failure isolation, real error contract
+- customer-service: reads, search, update, 201 + Location, error contract
+- Cross-cutting: entity Lombok, `@EnableScheduling`, gateway route alignment,
+  dev compose port publishing
+
+**Remaining in Phase 1**
+
+1. **archive-service** — no error handling, no list/search. `GET /check/{id}` is
+   the only read.
+2. **export-service** — has the streaming fix but no `@RestControllerAdvice`, so
+   a missing invoice returns a bare 404 with no body.
+3. **`PaymentStatus`** needs `PENDING` and `OVERDUE`; `EventType` needs
+   `UPDATED`.
+
+### What generalised across four services, and what didn't
+
+The `@RestControllerAdvice` + `ProblemDetail` shape copied cleanly four times —
+same handler set, same `problem()` helper, only the domain exceptions differ.
+That repetition is a candidate for a shared base class in `common` once
+archive-service is done, though four near-identical copies is arguably clearer
+than one abstract class with four subclasses.
+
+What did **not** generalise was the JPQL null-parameter handling. The fix
+depends on how many times the parameter is bound and whether a function is
+applied to it — details invisible from the JPQL and only apparent in the
+generated SQL.

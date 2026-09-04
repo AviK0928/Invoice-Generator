@@ -6,6 +6,9 @@ import com.example.invoice.customer_service.entity.Customer;
 
 public class CustomerMapper {
 
+    private CustomerMapper() {
+    }
+
     public static Customer toEntity(CustomerRequestDTO dto) {
         return Customer.builder()
                 .name(dto.getName())
@@ -15,6 +18,7 @@ public class CustomerMapper {
 
     public static CustomerResponseDTO toDTO(Customer entity) {
         return CustomerResponseDTO.builder()
+                .customerId(entity.getCustomerId())
                 .name(entity.getName())
                 .email(entity.getEmail())
                 .build();
