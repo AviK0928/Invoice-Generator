@@ -88,3 +88,24 @@ invoice-generator/
 ├── .env
 └── README.md
 ```
+
+## Deployment
+
+**Live demo:** <url> · credentials `admin` / `admin123`
+
+The hosted demo runs as a **single consolidated artifact**, while the system is
+built and developed as six microservices. That is a deliberate choice, not a
+limitation:
+
+- Nothing in this domain scales or deploys independently — export is not hit
+  more than invoicing, and no module has its own availability requirement.
+- On free-tier instances that sleep when idle, six services chained behind a
+  gateway means six cold starts. A first request takes 90+ seconds.
+
+The distributed topology is fully preserved and runnable —
+`docker compose up -d --build` starts all eight containers, and `k8s/` deploys
+the same thing to a cluster. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for
+both paths and [ADR 003](docs/adr/003-deploy-as-a-single-service.md) for the
+reasoning.
+
+The demo sleeps after 15 minutes idle; the first request may take 30–60 seconds.
