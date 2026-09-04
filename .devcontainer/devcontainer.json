@@ -1,36 +1,59 @@
 {
   "name": "Invoice Generator",
   "image": "mcr.microsoft.com/devcontainers/java:21-bookworm",
-
   "features": {
-    "ghcr.io/devcontainers/features/java:1": {
-      "version": "none",
-      "installMaven": "true",
-      "mavenVersion": "3.9.9"
-    },
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {
-      "moby": true
-    }
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/git-lfs:1": {}
   },
-
   "hostRequirements": {
     "cpus": 2,
     "memory": "8gb",
     "storage": "32gb"
   },
-
-  "forwardPorts": [8080, 8081, 8082, 8083, 8084, 8085, 5432, 9092],
+  "forwardPorts": [
+    8080,
+    8081,
+    8082,
+    8083,
+    8084,
+    8085,
+    5432,
+    9092
+  ],
   "portsAttributes": {
-    "8080": { "label": "api-gateway",      "onAutoForward": "notify" },
-    "8081": { "label": "customer-service", "onAutoForward": "silent" },
-    "8082": { "label": "invoice-service",  "onAutoForward": "silent" },
-    "8083": { "label": "export-service",   "onAutoForward": "silent" },
-    "8084": { "label": "import-service",   "onAutoForward": "silent" },
-    "8085": { "label": "archive-service",  "onAutoForward": "silent" },
-    "5432": { "label": "postgres",         "onAutoForward": "silent" },
-    "9092": { "label": "kafka",            "onAutoForward": "silent" }
+    "8080": {
+      "label": "api-gateway",
+      "onAutoForward": "notify"
+    },
+    "8081": {
+      "label": "customer-service",
+      "onAutoForward": "silent"
+    },
+    "8082": {
+      "label": "invoice-service",
+      "onAutoForward": "silent"
+    },
+    "8083": {
+      "label": "export-service",
+      "onAutoForward": "silent"
+    },
+    "8084": {
+      "label": "import-service",
+      "onAutoForward": "silent"
+    },
+    "8085": {
+      "label": "archive-service",
+      "onAutoForward": "silent"
+    },
+    "5432": {
+      "label": "postgres",
+      "onAutoForward": "silent"
+    },
+    "9092": {
+      "label": "kafka",
+      "onAutoForward": "silent"
+    }
   },
-
   "customizations": {
     "vscode": {
       "extensions": [
@@ -38,7 +61,6 @@
         "vmware.vscode-boot-dev-pack",
         "ms-azuretools.vscode-docker",
         "redhat.vscode-yaml",
-        "ms-kubernetes-tools.vscode-kubernetes-tools",
         "humao.rest-client"
       ],
       "settings": {
@@ -49,7 +71,6 @@
       }
     }
   },
-
-  "postCreateCommand": "java -version && mvn -version && docker --version",
+  "postCreateCommand": "java -version && mvn -version && docker --version && git lfs version",
   "remoteUser": "vscode"
 }
