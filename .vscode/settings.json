@@ -1,0 +1,16 @@
+{
+  "java.jdt.ls.vmargs": "-XX:+UseSerialGC -Xmx512m -Xms128m",
+  "java.configuration.updateBuildConfiguration": "interactive",
+  "java.autobuild.enabled": false,
+  "java.maven.downloadSources": false,
+  "java.import.maven.enabled": true,
+  "java.compile.nullAnalysis.mode": "disabled",
+  "files.eol": "\n",
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/.git/objects/**": true
+  },
+  "search.exclude": {
+    "**/target": true
+  }
+}
