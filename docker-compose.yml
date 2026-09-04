@@ -1,5 +1,12 @@
 name: invoice-generator
 
+# ---------------------------------------------------------------------------
+# Local development environment. Service ports 8081-8085 are published so a
+# single service can be curled directly while iterating; production traffic
+# goes through the gateway only. Production topology lives in render.yaml and
+# k8s/, not here.
+# ---------------------------------------------------------------------------
+
 # Shared health check. $$PORT escapes to a literal $PORT so the container's
 # own shell expands it — each service sets PORT in its environment below.
 x-health: &health
@@ -11,6 +18,9 @@ x-health: &health
 
 x-app: &app
   restart: unless-stopped
+  # Required, not cosmetic: the Dockerfile sets -XX:MaxRAMPercentage=70, which
+  # is a percentage of the *container* limit. With no limit the JVM sizes its
+  # heap from the host's RAM and six of them exhaust the machine.
   mem_limit: 512m
   build: &build
     context: .
@@ -39,6 +49,8 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Runs ONLY on first volume creation. Editing it later needs
+      # `docker compose down -v` or it is silently ignored.
       - ./db/init-databases.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
     ports:
       - "5432:5432"
@@ -53,8 +65,8 @@ services:
     restart: unless-stopped
     mem_limit: 1g
     # Dual listener. Containers reach the broker at kafka:9092 over the compose
-    # network; processes on the host (a service run natively via ./run.sh) reach
-    # it at localhost:29092. A broker advertises one address per listener, and
+    # network; processes on the host (a service run natively) reach it at
+    # localhost:29092. A broker advertises one address per listener, and
     # "kafka" does not resolve outside Docker — hence the second one.
     ports:
       - "29092:29092"
@@ -69,7 +81,8 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       # Single-broker sizing. The default __consumer_offsets topic has 50
       # partitions, which thrashes coordinator election on 2 cores and causes
-      # the NOT_COORDINATOR retry storm.
+      # the NOT_COORDINATOR retry storm. Cluster metadata is held inside the
+      # container, so changes here need a --force-recreate to take effect.
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 3
       KAFKA_NUM_PARTITIONS: 1
@@ -92,6 +105,8 @@ services:
       <<: *build
       args:
         SERVICE: customer-service
+    ports:
+      - "8081:8081"
     environment:
       <<: *app-env
       PORT: 8081
@@ -103,6 +118,8 @@ services:
       <<: *build
       args:
         SERVICE: invoice-service
+    ports:
+      - "8082:8082"
     environment:
       <<: *app-env
       PORT: 8082
@@ -114,6 +131,8 @@ services:
       <<: *build
       args:
         SERVICE: export-service
+    ports:
+      - "8083:8083"
     environment:
       <<: *app-env
       PORT: 8083
@@ -125,6 +144,8 @@ services:
       <<: *build
       args:
         SERVICE: import-service
+    ports:
+      - "8084:8084"
     environment:
       <<: *app-env
       PORT: 8084
@@ -136,6 +157,8 @@ services:
       <<: *build
       args:
         SERVICE: archive-service
+    ports:
+      - "8085:8085"
     environment:
       <<: *app-env
       PORT: 8085
@@ -159,6 +182,9 @@ services:
       IMPORT_SERVICE_URI: http://import-service:8084
       ARCHIVE_SERVICE_URI: http://archive-service:8085
     healthcheck: *health
+    # service_healthy, not service_started: the gateway would otherwise accept
+    # traffic before its downstreams are ready and return 502s. Costs ~90s on
+    # a cold `up` because each service has a 60s start_period.
     depends_on:
       customer-service:
         condition: service_healthy

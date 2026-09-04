@@ -1018,3 +1018,111 @@ building the full-export endpoint; git has the original if needed.
 
 The README should state plainly that backup and restore are delegated to managed
 Postgres. Currently there is no automated backup, and that is the honest state.
+
+### Correction: dev compose should publish service ports
+
+I removed the per-service `ports:` mappings on the reasoning that only the
+gateway should be reachable. That is correct for production and wrong here —
+this file is the local development environment, and being unable to curl a
+single service directly makes iterating on one service impossible without
+running it natively.
+
+Production topology is expressed in `render.yaml` and the k8s manifests, not in
+docker-compose. Publishing 8081–8085 locally costs nothing and removes a step
+from every test cycle.
+
+---
+
+## Phase 1 (continued) — import-service
+
+### Root cause: one bad row destroyed the whole import
+
+`importInvoiceData` threw on the first failure — after earlier invoices had
+already been saved, with no `@Transactional`. So a mid-file failure left a
+partial import and no record of where it stopped. `failureCount` was hardcoded
+to `0`, which was structurally always true because any failure aborted.
+
+Now each invoice is imported independently, failures are collected, and the
+summary reports real counts plus a per-invoice `errors` list.
+
+### The self-invocation trap
+
+`@Transactional` was first added to a `protected importOne(...)` method on
+`ImportService`, called from `importInvoiceData` in the same class. **That does
+nothing.** Spring applies `@Transactional` through a proxy; a call from one
+method of a class to another method of the same class never leaves the object,
+so the proxy is bypassed and the annotation is silently ignored. It compiles,
+runs, and gives no warning.
+
+Fixed by extracting `InvoiceImporter` as its own `@Service`. Crossing a bean
+boundary is what makes `REQUIRES_NEW` real.
+
+Verified rather than assumed: a file with one valid and one invalid invoice left
+only the valid one in the table. Had the annotation been inert, both would have
+committed.
+
+### Content-Type is not a trustworthy signal
+
+The upload validator initially rejected anything outside a whitelist of CSV MIME
+types. `curl -F` sends `application/octet-stream` by default, and so do many
+real clients — the header is set by whatever is uploading, not by the file.
+
+Downgraded to a debug log. The `.csv` extension check and the parser itself are
+the real gates. Rejecting on Content-Type blocks legitimate uploads while
+stopping nothing determined.
+
+### A missing file surfaces as several different exceptions
+
+Depending on whether the body is absent, malformed, or not multipart at all,
+Spring throws `MissingServletRequestPartException`,
+`MissingServletRequestParameterException`, `MultipartException`, or
+`HttpMediaTypeNotSupportedException`. Only the first was handled, so an empty
+POST fell through to the catch-all and returned 500.
+
+All four now map to 400. `MaxUploadSizeExceededException` extends
+`MultipartException`, so its handler is declared first — Spring resolves the
+most specific match, but ordering makes the intent legible.
+
+### Memory bounds
+
+`.getRecords()` materialised the entire CSV before any validation. Replaced with
+iteration over the parser, counting rows as they arrive against
+`import.max-rows` (externalised — a row cap is an operational knob, not a
+compile-time constant).
+
+Also added `spring.servlet.multipart` limits: 5MB file and request size, with
+`file-size-threshold: 1MB` so larger uploads spool to a temp file instead of
+heap. This is the one place a temp file is acceptable — Tomcat owns its
+lifecycle and deletes it when the request ends.
+
+### Correction: dev compose should publish service ports
+
+I had removed the per-service `ports:` mappings on the reasoning that only the
+gateway should be reachable. Correct for production, wrong here — this file *is*
+the local development environment, and being unable to curl one service directly
+forces a native run for every test.
+
+Production topology lives in `render.yaml` and `k8s/`, not in docker-compose.
+Publishing 8081–8085 locally costs nothing and removes a step from every cycle.
+
+Symptom when this bit: `docker compose ps` showed `8080/tcp` with no host
+mapping, and every curl to `localhost:8084` returned empty — no error, no
+connection refused message through `curl -s`. **Check the PORTS column before
+concluding a service is broken.**
+
+### Modelling: import-service denormalises the customer onto every row
+
+`ImportInvoice` carries `name` and `email` directly, and the CSV format repeats
+them on every line item — a five-item invoice states the customer's name five
+times, with nothing preventing those five from disagreeing.
+
+There is no `ImportCustomer` entity. Customer identity exists only as a
+`customerId` column with no referential integrity and no lookup.
+
+This is the fifth copy of customer data in the system (customer-service,
+invoice-service's `local_customers`, export-service's `export_customer`,
+archive-service, and now this) and the least defensible, because it is
+per-invoice rather than per-customer.
+
+Not urgent — import is a boundary that accepts whatever the file says — but the
+CSV contract should carry the customer once, not per row.

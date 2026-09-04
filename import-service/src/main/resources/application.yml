@@ -31,6 +31,23 @@ spring:
       group-id: import-service-group
       auto-offset-reset: earliest
 
+  # Bounds the upload. Without these, a large CSV is read into heap and kills a
+  # 512MB instance. file-size-threshold spools anything over 1MB to a temp file
+  # that Tomcat deletes when the request ends — the one place a temp file is
+  # fine, because the container owns its lifecycle.
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: ${MAX_UPLOAD_SIZE:5MB}
+      max-request-size: ${MAX_UPLOAD_SIZE:5MB}
+      file-size-threshold: 1MB
+
+# Rejected past this many rows during parsing, before anything is persisted.
+# Sits below the byte limit above so a small file of many tiny rows is still
+# caught.
+import:
+  max-rows: ${IMPORT_MAX_ROWS:10000}
+
 management:
   endpoints:
     web:

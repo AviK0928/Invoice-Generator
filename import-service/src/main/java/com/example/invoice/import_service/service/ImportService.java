@@ -1,104 +1,126 @@
 package com.example.invoice.import_service.service;
 
-import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
-import com.example.invoice.common.util.HashUtil;
 import com.example.invoice.import_service.dto.ImportSummaryDTO;
-import com.example.invoice.import_service.entity.ImportInvoice;
-import com.example.invoice.import_service.entity.ImportInvoiceItem;
-import com.example.invoice.import_service.kafka.InvoiceImportProducer;
-import com.example.invoice.import_service.mapper.ImportMapper;
-import com.example.invoice.import_service.repository.ImportInvoiceItemRepository;
-import com.example.invoice.import_service.repository.ImportInvoiceRepository;
+import com.example.invoice.import_service.exception.ImportValidationException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
-import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStreamReader;
-import java.math.BigDecimal;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ImportService {
 
-        private final ImportInvoiceRepository invoiceRepository;
-        private final ImportInvoiceItemRepository itemRepository;
-        private final InvoiceImportProducer eventProducer;
+        private static final Set<String> ALLOWED_TYPES = Set.of(
+                        "text/csv", "application/csv", "text/plain", "application/vnd.ms-excel");
 
-        public ImportSummaryDTO importInvoiceData(MultipartFile file) throws Exception {
-                List<CSVRecord> records = CSVParser.parse(
-                                new InputStreamReader(file.getInputStream()),
-                                CSVFormat.DEFAULT.withFirstRecordAsHeader()).getRecords();
+        private final InvoiceImporter invoiceImporter;
 
-                if (records.isEmpty())
-                        throw new IllegalArgumentException("Empty file");
+        /** Row cap is an operational knob, not a compile-time decision. */
+        @Value("${import.max-rows:10000}")
+        private int maxRows;
 
-                // Group by invoiceId
-                Map<Long, List<CSVRecord>> invoiceGroups = records.stream()
-                                .collect(Collectors.groupingBy(r -> Long.parseLong(r.get("invoiceId"))));
+        public ImportSummaryDTO importInvoiceData(MultipartFile file) {
+                validateUpload(file);
+                Map<Long, List<CSVRecord>> groups = parseAndGroup(file);
 
                 int success = 0;
-                for (Map.Entry<Long, List<CSVRecord>> entry : invoiceGroups.entrySet()) {
-                        List<CSVRecord> invoiceRecords = entry.getValue();
+                List<String> errors = new ArrayList<>();
+
+                for (Map.Entry<Long, List<CSVRecord>> entry : groups.entrySet()) {
                         try {
-                                // Compute content hash
-                                String raw = invoiceRecords.stream()
-                                                .map(CSVRecord::toString)
-                                                .collect(Collectors.joining());
-                                String contentHash = HashUtil.computeSHA256(raw);
-
-                                // Convert records to entity
-                                ImportInvoice invoice = ImportMapper.toInvoice(
-                                                invoiceRecords,
-                                                new ArrayList<>(), // set below
-                                                contentHash);
-
-                                List<ImportInvoiceItem> items = invoiceRecords.stream()
-                                                .map(r -> ImportMapper.toInvoiceItem(r, invoice))
-                                                .collect(Collectors.toList());
-                                invoice.setItems(items);
-
-                                // Validate totalAmount
-                                BigDecimal calculated = items.stream()
-                                                .map(ImportInvoiceItem::getTotalPrice)
-                                                .reduce(BigDecimal.ZERO, BigDecimal::add);
-                                if (calculated.compareTo(invoice.getTotalAmount()) != 0) {
-                                        throw new IllegalArgumentException("Mismatch in total amount for invoiceId: "
-                                                        + invoice.getInvoiceId());
-                                }
-
-                                // Save locally
-                                invoiceRepository.save(invoice);
-
-                                // Build and send event
-                                InvoiceEventDTO event = InvoiceEventDTO.builder()
-                                                .invoiceId(invoice.getInvoiceId())
-                                                .customerId(invoice.getCustomerId())
-                                                .totalAmount(invoice.getTotalAmount())
-                                                .paymentStatus(invoice.getPaymentStatus())
-                                                .eventType(com.example.invoice.common.enums.InvoiceEventType.CREATED)
-                                                .build();
-
-                                eventProducer.publish(event);
+                                invoiceImporter.importOne(entry.getValue());
                                 success++;
                         } catch (Exception e) {
-                                throw new IllegalArgumentException(
-                                                "Error at invoiceId " + entry.getKey() + ": " + e.getMessage());
+                                // One bad invoice must not discard the rest of the file.
+                                log.warn("Import failed for invoiceId {}", entry.getKey(), e);
+                                errors.add("invoiceId " + entry.getKey() + ": " + e.getMessage());
                         }
                 }
 
+                int totalRows = groups.values().stream().mapToInt(List::size).sum();
                 return ImportSummaryDTO.builder()
-                                .totalRows(records.size())
+                                .totalRows(totalRows)
                                 .successCount(success)
-                                .failureCount(0)
-                                .message("Import completed successfully")
+                                .failureCount(errors.size())
+                                .errors(errors)
+                                .message(errors.isEmpty()
+                                                ? "Import completed successfully"
+                                                : "Import completed with " + errors.size() + " failure(s)")
                                 .build();
+        }
+
+        private void validateUpload(MultipartFile file) {
+                if (file == null || file.isEmpty()) {
+                        throw new ImportValidationException("File is empty.");
+                }
+
+                String name = file.getOriginalFilename();
+                if (name == null || !name.toLowerCase().endsWith(".csv")) {
+                        throw new ImportValidationException("Only .csv files are accepted.");
+                }
+
+                // Content-Type is set by the client and is not trustworthy — curl sends
+                // application/octet-stream by default, as do many real clients. Logged,
+                // not enforced; the extension check above and the parser are the real
+                // gates.
+                String contentType = file.getContentType();
+                if (contentType != null && !ALLOWED_TYPES.contains(contentType)) {
+                        log.debug("Unexpected content type {} for {}", contentType, name);
+                }
+        }
+
+        /**
+         * Iterates the parser rather than calling getRecords(), so the row cap is
+         * enforced as rows arrive instead of after the whole file is in heap.
+         */
+        private Map<Long, List<CSVRecord>> parseAndGroup(MultipartFile file) {
+                Map<Long, List<CSVRecord>> groups = new LinkedHashMap<>();
+                int rows = 0;
+
+                try (Reader reader = new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8);
+                                CSVParser parser = CSVFormat.DEFAULT.builder()
+                                                .setHeader().setSkipHeaderRecord(true).setTrim(true)
+                                                .build().parse(reader)) {
+
+                        for (CSVRecord record : parser) {
+                                if (++rows > maxRows) {
+                                        throw new ImportValidationException(
+                                                        "File exceeds the maximum of " + maxRows + " rows.");
+                                }
+                                long invoiceId;
+                                try {
+                                        invoiceId = Long.parseLong(record.get("invoiceId"));
+                                } catch (IllegalArgumentException e) {
+                                        throw new ImportValidationException(
+                                                        "Row " + record.getRecordNumber()
+                                                                        + ": invalid or missing invoiceId.");
+                                }
+                                groups.computeIfAbsent(invoiceId, k -> new ArrayList<>()).add(record);
+                        }
+                } catch (ImportValidationException e) {
+                        throw e;
+                } catch (Exception e) {
+                        throw new ImportValidationException("Could not parse CSV: " + e.getMessage());
+                }
+
+                if (groups.isEmpty()) {
+                        throw new ImportValidationException("File contains no data rows.");
+                }
+                return groups;
         }
 }
