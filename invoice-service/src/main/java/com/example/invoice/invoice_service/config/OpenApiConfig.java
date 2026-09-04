@@ -1,9 +1,12 @@
 package com.example.invoice.invoice_service.config;
 
+import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
+import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -14,41 +17,56 @@ import java.util.List;
 @Configuration
 public class OpenApiConfig {
 
-    @Value("${server.port:8082}")
-    private String port;
+        private static final String SECURITY_SCHEME = "bearer-jwt";
 
-    @Bean
-    public OpenAPI invoiceServiceApi() {
-        return new OpenAPI()
-                .info(new Info()
-                        .title("Invoice Service API")
-                        .version("1.0.0")
-                        .description("""
-                                Invoice lifecycle: creation, retrieval, archival and deletion.
+        @Value("${server.port:8082}")
+        private String port;
 
-                                **Idempotent creation.** Two requests with identical content
-                                resolve to the same invoice rather than creating a duplicate.
-                                Content is fingerprinted from the customer, date and line items —
-                                payment status and timestamps are excluded, since they are
-                                mutable state rather than content.
+        @Bean
+        public OpenAPI invoiceServiceApi() {
+                return new OpenAPI()
+                                .info(new Info()
+                                                .title("Invoice Service API")
+                                                .version("1.0.0")
+                                                .description("""
+                                                                Invoice lifecycle: creation, retrieval, archival and deletion.
 
-                                **Errors** follow RFC 9457 Problem Details. Validation failures
-                                return 400 with a per-field `errors` object; an unknown customer
-                                returns 422, since the request parsed correctly but was
-                                semantically wrong.
+                                                                **Idempotent creation.** Two requests with identical content
+                                                                resolve to the same invoice rather than creating a duplicate.
+                                                                Content is fingerprinted from the customer, date and line items —
+                                                                payment status and timestamps are excluded, since they are
+                                                                mutable state rather than content.
 
-                                **Events.** Creation and archival publish to Kafka for the
-                                export and archive services. Note that an idempotent create
-                                short-circuits before publishing.
-                                """)
-                        .contact(new Contact()
-                                .name("AviK0928")
-                                .url("https://github.com/AviK0928/Invoice-Generator"))
-                        .license(new License()
-                                .name("MIT")
-                                .url("https://opensource.org/licenses/MIT")))
-                .servers(List.of(
-                        new Server().url("/").description("Through the gateway"),
-                        new Server().url("http://localhost:" + port).description("Direct")));
-    }
+                                                                **Errors** follow RFC 9457 Problem Details. Validation failures
+                                                                return 400 with a per-field `errors` object; an unknown customer
+                                                                returns 422, since the request parsed correctly but was
+                                                                semantically wrong.
+
+                                                                **Events.** Creation and archival publish to Kafka for the
+                                                                export and archive services. Note that an idempotent create
+                                                                short-circuits before publishing.
+                                                                """)
+                                                .contact(new Contact()
+                                                                .name("AviK0928")
+                                                                .url("https://github.com/AviK0928/Invoice-Generator"))
+                                                .license(new License()
+                                                                .name("MIT")
+                                                                .url("https://opensource.org/licenses/MIT")))
+                                .addSecurityItem(new SecurityRequirement().addList(SECURITY_SCHEME))
+                                .components(new Components().addSecuritySchemes(SECURITY_SCHEME,
+                                                new SecurityScheme()
+                                                                .type(SecurityScheme.Type.HTTP)
+                                                                .scheme("bearer")
+                                                                .bearerFormat("JWT")
+                                                                .description("""
+                                                                                Obtain a token from `POST /api/auth/login` on the gateway,
+                                                                                then paste the `accessToken` value here (without the
+                                                                                `Bearer ` prefix — Swagger adds it).
+                                                                                """)))
+                                .servers(List.of(
+                                                new Server().url("/")
+                                                                .description("Through the gateway (authenticated)"),
+                                                new Server().url("http://localhost:" + port)
+                                                                .description("Direct (no auth)")));
+        }
 }

@@ -16,6 +16,9 @@ spring:
   cloud:
     gateway:
       routes:
+        # /api/auth/** matches no route here, so it falls through to the
+        # gateway's own AuthController rather than being proxied anywhere.
+        #
         # Each route also carries that service's /v3/api-docs, because the spec
         # paths are prefixed with the same namespace. No separate doc routes.
         - id: customer-service
@@ -46,12 +49,38 @@ spring:
       default-filters:
         - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_FIRST
 
-# The gateway has no endpoints of its own, so it serves no spec — it only hosts
-# the UI, with a dropdown that fetches each service's spec through the routes
-# above. One page to browse the whole API.
+# HS256, symmetric: the gateway is both issuer and verifier, so there is no
+# third party needing a public key. Generate with: openssl rand -base64 48
+# The local default exists so the gateway starts without a .env; it must be
+# overridden anywhere that matters.
+jwt:
+  secret: ${JWT_SECRET:local-development-only-secret-at-least-32-bytes-long-change-me}
+
+# Users live in configuration; there is no user service, and adding one to
+# demonstrate JWT would be scope creep. Passwords are bcrypt hashes — plaintext
+# never appears here or in the repository.
+#
+# Demo credentials are documented in the README. Regenerate a hash with:
+#   docker run --rm httpd:alpine htpasswd -bnBC 10 "" yourpassword | tr -d ':\n'
+auth:
+  token-ttl-minutes: ${JWT_TTL_MINUTES:60}
+  users:
+    admin:
+      password-hash: ${ADMIN_PASSWORD_HASH}
+      roles: [ADMIN, USER]
+    user:
+      password-hash: ${USER_PASSWORD_HASH}
+      roles: [USER]
+
+# The gateway owns one endpoint (/api/auth/login), so it does serve a small spec
+# of its own at /gateway/v3/api-docs — under /gateway rather than /api so it
+# does not collide with the proxy routes. api-docs must stay enabled: springdoc's
+# WebFlux UI auto-configuration is conditional on it, so disabling the spec takes
+# the UI down with it.
 springdoc:
   api-docs:
-    enabled: false
+    enabled: true
+    path: /gateway/v3/api-docs
   swagger-ui:
     enabled: true
     path: /swagger-ui.html
@@ -84,6 +113,8 @@ logging:
   level:
     root: INFO
     org.springframework.cloud.gateway: ${GATEWAY_LOG_LEVEL:INFO}
+    # Logs failed logins and token rejections without logging the tokens.
+    com.example.invoice.api_gateway: ${LOG_LEVEL:INFO}
 
 ---
 spring:
@@ -96,6 +127,7 @@ server:
 logging:
   level:
     org.springframework.cloud.gateway: DEBUG
+    org.springframework.security: DEBUG
 
 ---
 spring:
@@ -105,3 +137,7 @@ spring:
 springdoc:
   swagger-ui:
     enabled: ${SPRINGDOC_ENABLED:false}
+# No default for the secret in the cloud profile: the gateway must fail to start
+# rather than run with a known key. Set JWT_SECRET in Render's environment.
+jwt:
+  secret: ${JWT_SECRET}

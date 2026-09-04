@@ -181,6 +181,14 @@ services:
       EXPORT_SERVICE_URI: http://export-service:8083
       IMPORT_SERVICE_URI: http://import-service:8084
       ARCHIVE_SERVICE_URI: http://archive-service:8085
+      # Required. The gateway signs and verifies JWTs with this key, so it must
+      # not silently fall back to the default committed in application.yml.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      # Optional: bcrypt hashes for the demo accounts. Unset falls back to the
+      # placeholder hashes in application.yml, which are public — fine locally,
+      # never anywhere reachable.
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH in .env}
+      USER_PASSWORD_HASH: ${USER_PASSWORD_HASH:?set USER_PASSWORD_HASH in .env}
     healthcheck: *health
     # service_healthy, not service_started: the gateway would otherwise accept
     # traffic before its downstreams are ready and return 502s. Costs ~90s on

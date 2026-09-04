@@ -1612,3 +1612,120 @@ docker system prune -af     # heavier: re-downloads base images afterwards
 
 Named volumes survive all of these, so `pgdata` is safe. Habit worth keeping:
 `docker compose down` when stopping work, and prune the builder periodically.
+
+---
+
+## Phase 2 (continued) — JWT authentication
+
+### Removed: FakeAuthFilter
+
+A `WebFilter` that compared the Authorization header against the literal string
+`Bearer faketoken`, backed by a `SecurityConfig` with three `permitAll()` calls
+and a comment reading "let your FakeAuthFilter handle it."
+
+Replaced with Spring Security's OAuth2 resource server: HS256 JWTs issued by the
+gateway at `POST /api/auth/login`, verified on every `/api/**` request. The
+final rule is now `.anyExchange().denyAll()` — anything not explicitly permitted
+is refused, rather than permitted three times over.
+
+### Two design decisions worth defending
+
+**Authentication lives at the gateway; services trust it.** Downstream services
+do not validate the JWT themselves. In production only the gateway is publicly
+reachable, so this holds — but it means **a service reached directly is
+unauthenticated**, which is true right now in the dev compose where 8081–8085
+are published. The alternative, five independent resource servers, is more
+correct and five times the config. ADR required either way.
+
+**Users live in configuration, not a database.** There is no user service, and
+building one to demonstrate JWT would be scope creep. Two accounts with bcrypt
+hashes supplied via environment variables; plaintext appears nowhere.
+
+**Symmetric HS256, not RS256.** The gateway is both issuer and verifier, so
+there is no third party needing a public key. RS256 would add key distribution
+for no benefit at this scale.
+
+### Failure: "Failed to select a JWK signing key"
+
+`NimbusJwtEncoder` defaults to RS256 when the JWS header is unset, and no RSA
+key exists — so login returned 500 while the decoder side worked fine.
+
+```java
+JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
+jwtEncoder.encode(JwtEncoderParameters.from(header, claims));
+```
+
+The decoder needs no equivalent: `NimbusReactiveJwtDecoder.withSecretKey(...)`
+infers HS256 from the key type. Only the encoder has to be told.
+
+### The dummy-hash trap
+
+Timing defence: hash the supplied password even when the username is unknown, so
+a missing user is not measurably faster than a wrong password. Bcrypt at cost 10
+takes ~100ms; an early return takes ~1ms, and that gap enumerates usernames.
+
+My first constant — `$2a$10$invalidinvalid...` — **was not valid bcrypt.** The
+salt must be 22 characters from bcrypt's alphabet, so `matches()` bailed
+immediately and the defence did nothing. A protection that silently does not
+protect is worse than none, because it stops anyone looking again.
+
+Against two configured accounts documented in a public README there is nothing
+to enumerate, so this is arguably unnecessary here regardless. If kept, generate
+it at startup with `passwordEncoder.encode(UUID.randomUUID().toString())` rather
+than hardcoding a constant that has to be exactly right.
+
+### `$` in .env is a substitution hazard
+
+Compose performs variable substitution on `.env` values. A bcrypt hash
+(`$2a$10$...`) and a base64 secret both contain `$`, so Compose reads `$2a` and
+`$10` as undefined variables and substitutes empty strings. Symptom: warnings
+naming a fragment of your own secret as a missing variable, and logins that fail
+with no useful error.
+
+Fix: single-quote every value in `.env`. Substitution does not occur inside
+single quotes, so nothing needs escaping. Also prefer `openssl rand -hex 32`
+over `-base64 48` — 256 bits with no shell-special characters at all.
+
+Note `docker compose config` re-escapes `$` as `$$` in its output so the printed
+YAML round-trips. Seeing `$$` there is correct; the container receives single
+`$`. Verify with `docker compose exec api-gateway printenv`.
+
+### Also removed inline defaults for the hashes
+
+`${ADMIN_PASSWORD_HASH:$2a$10$...}` puts a `$`-laden default inside a Spring
+placeholder, which is ambiguous. Now `${ADMIN_PASSWORD_HASH}` with no default —
+startup fails loudly if it is missing rather than silently using a public hash.
+
+Same reasoning drops the `jwt.secret` default in the `cloud` profile: a gateway
+signing tokens with a key committed to a public repository would let anyone
+forge an admin token.
+
+### Swagger UI: two config traps, neither obvious
+
+**`springdoc.api-docs.enabled: false` takes the UI down with it.** The WebFlux
+UI's resource handler is registered by an auto-configuration conditional on
+api-docs being active. Setting it `false` on the gateway — which has almost no
+endpoints of its own — produced a clean 404 on every UI path with no error
+anywhere. Fixed by enabling it at `/gateway/v3/api-docs`, under `/gateway`
+rather than `/api` so it does not collide with the proxy routes. The gateway now
+documents `/api/auth/login`, which it genuinely owns.
+
+**`swagger-config` moves with `api-docs.path`.** It is served at
+`/gateway/v3/api-docs/swagger-config`, not the default
+`/v3/api-docs/swagger-config`. I permitted and tested the wrong one and read the
+404 as a problem when it was simply the wrong path.
+
+Also added a `bearer-jwt` security scheme to each service's `OpenApiConfig`, so
+the UI renders an Authorize button. Without it the page loads but nothing can be
+exercised, since the gateway rejects unauthenticated `/api/**` calls.
+
+### Diagnostic notes
+
+`./mvnw -q dependency:tree` prints nothing — the plugin logs at INFO and `-q`
+suppresses it. I read the empty output as a missing dependency when the
+dependency was present. Drop `-q` when the output *is* the answer.
+
+"Zero springdoc log lines" was equally weak: springdoc logs nothing at INFO on a
+normal startup, so a count of zero is expected either way. Two bad inferences in
+a row before checking the actual HTTP status codes, which named the problem
+immediately.
