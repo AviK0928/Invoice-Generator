@@ -1,6 +1,7 @@
 package com.example.invoice.export_service.controller;
 
 import com.example.invoice.export_service.entity.ExportInvoice;
+import com.example.invoice.export_service.exception.ExportInvoiceNotFoundException;
 import com.example.invoice.export_service.repository.ExportInvoiceRepository;
 import com.example.invoice.export_service.service.ExportService;
 import com.example.invoice.export_service.service.PdfExportService;
@@ -39,10 +40,8 @@ public class ExportController {
     @GetMapping("/invoice/{invoiceId}")
     @Transactional(readOnly = true)
     public ResponseEntity<byte[]> downloadInvoicePdf(@PathVariable Long invoiceId) throws Exception {
-        ExportInvoice invoice = exportInvoiceRepository.findById(invoiceId).orElse(null);
-        if (invoice == null) {
-            return ResponseEntity.notFound().build();
-        }
+        ExportInvoice invoice = exportInvoiceRepository.findById(invoiceId)
+                .orElseThrow(() -> new ExportInvoiceNotFoundException(invoiceId));
 
         byte[] pdf = pdfExportService.generatePdfForInvoice(invoice);
         return ResponseEntity.ok()

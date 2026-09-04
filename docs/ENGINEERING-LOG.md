@@ -1250,3 +1250,195 @@ What did **not** generalise was the JPQL null-parameter handling. The fix
 depends on how many times the parameter is bound and whether a function is
 applied to it — details invisible from the JPQL and only apparent in the
 generated SQL.
+
+### Removed: automated archive retention (and how it returns)
+
+`ArchiveScheduler` → `exportAndDeleteExpiredArchives()` wrote a CSV to
+`exports/`, published N `DELETE_INVOICE` events, then deleted the rows from
+`archivedb`. `exports/` is container-relative and vanishes on restart, so on
+Render this exports to nowhere and then permanently destroys the archive — and
+tells invoice-service to delete its copies too.
+
+**I enabled this.** Earlier in Phase 1 I added `@EnableScheduling` to
+`ArchiveServiceApplication` on the grounds that `ArchiveScheduler` was dead code,
+without reading what it did. It was dead code protecting the system from itself.
+Reverted, and `ExportService` + `ArchiveScheduler` deleted.
+
+Also noted: the cutoff was `minusMonths(1)`, not the six months the README
+claims.
+
+**Prerequisites before it can safely return:**
+
+| Need | Why | Phase |
+|---|---|---|
+| Object storage | a destination that survives restart | 6 |
+| Outbox + DLQ | dying at event 3 of 50 leaves 3 invoices deleted with no archive | 3 |
+| Verify-before-delete | confirm the object exists and checksums match | 6 |
+| Single-instance locking | two replicas both fire `@Scheduled` | 6 |
+
+**Return path — three separate operations, never one:**
+
+1. `POST /api/archives/retention/export?before=...` — writes to object storage,
+   returns key and row count, deletes nothing.
+2. Soft delete — `purgedAt` and `exportKey` columns; reads filter
+   `purgedAt IS NULL`. Recoverable.
+3. Hard delete — only rows already marked purged, past a grace period, whose
+   `exportKey` still resolves. Three gates.
+
+A scheduler wraps this only afterwards, with ShedLock and a flag defaulting off.
+
+**Recommendation: ship step 1 only.** A portfolio app with a few hundred rows has
+no retention pressure, and a purge job's failure mode is silent permanent data
+loss. Write the ADR instead — "we removed a retention job that destroyed data
+with no durable destination and chose export-without-purge" reads better than a
+scheduler that happens to work.
+
+**General lesson:** dead code is sometimes load-bearing. Before enabling
+something that has never run, read what it does. "This has an annotation
+missing" is a description, not a diagnosis.
+
+---
+
+## Phase 1 (continued) — archive-service and export-service
+
+### Critical: I enabled a scheduler that destroys data
+
+Earlier in Phase 1 I added `@EnableScheduling` to `ArchiveServiceApplication`
+because `ArchiveScheduler` had `@Scheduled` but never ran. I diagnosed the
+missing annotation without reading what the scheduler did.
+
+The chain: `ArchiveScheduler` → `exportAndDeleteExpiredArchives()` → writes a
+CSV to `exports/` → publishes N `DELETE_INVOICE` events → **deletes the rows
+from archivedb**.
+
+`exports/` is a container-relative path. On Render it vanishes on restart. So
+the job exports to nowhere, permanently destroys the archive, and instructs
+invoice-service to delete its copies too. No transaction, no verification, no
+durable destination.
+
+**It was dead code protecting the system from itself.** Reverted
+`@EnableScheduling`; deleted `ArchiveScheduler` and archive-service's
+`ExportService`.
+
+Also noted: the cutoff was `LocalDate.now().minusMonths(1)` — one month, not the
+six the README claims.
+
+I missed archive-service's `ExportService` in the filesystem-writes audit
+because I only searched export-service. `grep -rn "FileOutputStream\|new File("
+--include=*.java .` across the whole repo would have found it.
+
+**General lesson: dead code is sometimes load-bearing.** "This has an annotation
+missing" is a description, not a diagnosis. Read what something does before
+enabling it.
+
+### How retention returns
+
+Four prerequisites, none of which exist yet:
+
+| Need | Why | Phase |
+|---|---|---|
+| Object storage | a destination that survives restart | 6 |
+| Outbox + DLQ | dying at event 3 of 50 leaves 3 invoices deleted with no archive | 3 |
+| Verify-before-delete | confirm the object exists and checksums match | 6 |
+| Single-instance locking | two replicas both fire `@Scheduled` | 6 |
+
+Return path is three separate operations, never one:
+
+1. `POST /api/archives/retention/export?before=...` — writes to object storage,
+   returns key and row count, deletes nothing.
+2. Soft delete — `purgedAt` and `exportKey` columns; reads filter
+   `purgedAt IS NULL`. Recoverable.
+3. Hard delete — only rows already marked purged, past a grace period, whose
+   `exportKey` still resolves. Three gates.
+
+A scheduler wraps this only afterwards, with ShedLock and a flag defaulting off.
+
+**Recommendation: ship step 1 only.** A portfolio app with a few hundred rows has
+no retention pressure, and a purge job's failure mode is silent permanent data
+loss. Write the ADR instead — "we removed a retention job that destroyed data
+with no durable destination and chose export-without-purge" reads better than a
+scheduler that happens to work.
+
+### Root cause: two full table scans filtered in Java
+
+`getArchivedInvoiceDetails` and `unarchiveInvoice` both did:
+
+```java
+itemRepository.findAll().stream()
+        .filter(item -> item.getInvoiceId().equals(invoiceId))
+        .toList()
+```
+
+Every row in `archived_invoice_items` loaded into heap, then discarded. At a
+thousand invoices it is slow; at a hundred thousand it OOMs a 512MB instance.
+
+Replaced with derived queries: `findByInvoiceId` and `deleteByInvoiceId`. Spring
+Data generates the WHERE clause from the method name — the code was longer *and*
+worse.
+
+### Fixed alongside in archive-service
+
+- `/check/{invoiceId}` → `/{invoiceId}`. A REST resource path, not an RPC verb.
+- "Not in archive" returned **400 with a string body**; now 404 with a Problem
+  Detail.
+- Added `GET /api/archives` — paged, filterable by customer and date range.
+  Previously the only read was a single-invoice lookup.
+- `jakarta.transaction.Transactional` → Spring's, in `UnarchiveService`.
+- `saveArchivedInvoice` had no transaction despite two writes across two tables.
+
+**Known N+1, left deliberately:** `listArchived` runs one item query per invoice.
+Fixing it properly needs a join fetch, which conflicts with pagination.
+Acceptable at a page size of 20; revisit if that grows.
+
+### export-service: the size cap returned 500
+
+`ExportTooLargeException` — the guard added when the monthly ZIP moved
+in-memory — had no handler, so exceeding the 500-invoice cap produced a 500.
+A limit that reports as a server error is the opposite of a limit. Now 413.
+
+Its advice also needs two handlers the others do not:
+`MissingServletRequestParameterException` for an absent `?month`, and a
+type-mismatch message naming the expected `yyyy-MM` format. Both export
+endpoints take parameters rather than bodies.
+
+`downloadInvoicePdf` returned a bare `ResponseEntity.notFound()` — a 404 with no
+body. Now throws `ExportInvoiceNotFoundException`.
+
+### Duplication worth noting
+
+`GlobalExceptionHandler` now exists five times. The five generic handlers —
+validation, unreadable body, type mismatch, integrity, catch-all — plus the
+`problem()` helper are byte-identical across every service. Only the domain
+handlers differ.
+
+Candidate for a `BaseExceptionHandler` in `common` with per-service subclasses.
+Small Phase 2 task, and the kind of duplication a reviewer points at. The
+counter-argument is that five explicit copies are easier to read than one
+abstract class with five subclasses — worth deciding rather than drifting.
+
+---
+
+## Phase 1 complete
+
+| Service | Before | After |
+|---|---|---|
+| invoice | create always threw a constraint violation; no reads | idempotent create, paged reads with filters, complete event |
+| customer | no id in responses, no GET at all | reads, search, update, 201 + Location |
+| import | one bad row aborted the file after partial commit | per-invoice isolation, bounded uploads, real error counts |
+| export | wrote temp files on every request and every event | in-memory, nothing on disk |
+| archive | full table scans, 400s for not-found, a destructive scheduler | derived queries, 404s, scheduler removed |
+
+All five return RFC 9457 Problem Details. All five are reachable through the
+gateway. Nothing writes to the local filesystem.
+
+**Deferred to Phase 2**
+
+1. `PaymentStatus` needs `PENDING` and `OVERDUE`; `EventType` needs `UPDATED`
+   (`updateCustomer` currently publishes `CREATED`, which functions as an upsert
+   but lies about what happened).
+2. Extract `BaseExceptionHandler` into `common`, or decide explicitly not to.
+3. Flyway replacing `ddl-auto: update`, which is where the inconsistent table
+   naming gets settled.
+4. `com.lowagie:itext:2.1.7` → OpenPDF. 2009, unmaintained, known CVEs.
+5. api-gateway still on Boot 3.2.5 while everything else is 3.5.3.
+6. `FakeAuthFilter` still accepts the literal string `Bearer faketoken`.
