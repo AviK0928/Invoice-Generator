@@ -1933,3 +1933,166 @@ it was archived** — a silent inconsistency between two paths that should be on
 
 Now delegates to `InvoiceService.archiveInvoice(id, archiveType)`. Also fixed:
 the cutoff was `minusMonths(1)` while the README
+
+---
+
+## Phase 3 — Reliable event delivery
+
+### The problem, restated
+
+Three incidents in this log shared one root cause: **the domain write and the
+event publish were two operations with no atomicity between them.**
+
+1. Kafka down meant `producer.publish()` threw inside `@Transactional`, rolling
+   back the entire creation.
+2. Events published with no consumer listening were lost with no reconciliation
+   path.
+3. A failed event was silently discarded with the offset committed.
+
+### Part 1: transactional outbox
+
+`OutboxWriter.record()` is called inside the same transaction as the domain
+write, so the invoice and the event describing it commit together or not at
+all. `OutboxDispatcher` polls afterwards and owns delivery.
+
+Delivery is **at-least-once**: a publish that succeeds but whose mark-published
+fails republishes on the next poll. That is the deliberate trade — the
+alternative, marking published before confirming, loses events.
+
+**Four details that matter:**
+
+`FOR UPDATE SKIP LOCKED` in the claim query. Without it two instances dispatch
+the same batch and publish everything twice. Notably this **cannot** be
+`@Lock(LockModeType.PESSIMISTIC_WRITE)` on a native query — Spring Data applies
+lock modes through JPQL and throws at execution. The lock has to be in the SQL.
+
+Synchronous `send().get(5s)`. Async lets the transaction commit before delivery
+is known, marking rows published that never left.
+
+`acks=all` plus `enable.idempotence`. The dispatcher marks published when
+`get()` returns; under weaker acks that can precede replication, so a leader
+failure loses an event the outbox believes was delivered — quietly
+reintroducing the exact problem it exists to solve.
+
+Producer timeouts cut to 5s from the 60s `max.block.ms` default, which caused an
+earlier minute-long hang.
+
+### The retry budget was wrong, and testing caught it
+
+First outage test: `attempts` hit `max-attempts: 10` and the event was
+**abandoned 20 seconds into the outage** — before Kafka finished restarting.
+
+Ten attempts at a 2-second poll is 20 seconds of tolerance. A broker restart
+takes longer. **The retry budget must exceed realistic outage duration, or the
+outbox abandons events during exactly the incidents it exists to survive.**
+
+Raised to 300, plus exponential backoff via a `next_attempt_at` column capped at
+five minutes. Retrying every 2 seconds for the duration of an outage wastes
+cycles and hammers a broker still coming up. Second run: `attempts = 4` after 30
+seconds, delivery on recovery.
+
+### Part 2: idempotent consumers
+
+At-least-once delivery is a promise the consumers were not honouring. Each
+consuming service now has a `processed_events` inbox keyed on an `X-Event-Id`
+header the dispatcher writes (`invoice-service:<outbox row id>`). The check and
+the projection commit in one transaction, so "processed" and "the effects of
+processing" cannot disagree.
+
+Deliberately **not** shared via the common module. Each service owns its schema;
+a shared entity would couple them. The exception handler was worth extracting at
+60 lines × 5 — a 15-line entity is not, and the coupling cost is real.
+
+Verified by resetting the consumer group offset to zero and confirming the
+redelivered event produced no second row.
+
+### Part 3: dead letters
+
+`DefaultErrorHandler` with `DeadLetterPublishingRecoverer`, five retries at
+exponential backoff, then `{topic}-dlt`.
+
+**`ErrorHandlingDeserializer` is what makes this work at all.** Without it a
+malformed message fails deserialization *before* the listener is reached, the
+error handler never sees it, and the container retries the same poison record
+forever.
+
+The DLT record carries the original payload, source topic, consumer group,
+timestamp, and a stack trace naming the Jackson parse failure. Previously that
+message was retried briefly, the offset committed, and it was gone.
+
+The DLT producer uses `DelegatingByTypeSerializer` on **both** key and value: a
+record that failed deserialization arrives as raw bytes, and a `StringSerializer`
+would fail to republish it — losing the poison message you were trying to
+preserve.
+
+### Trap the outbox introduced
+
+The dispatcher publishes pre-serialised strings via `StringSerializer`, so there
+is **no `__TypeId__` header**. Consumers constructed as
+`new JsonDeserializer<>(SomeDto.class)` are fine; those using
+`new JsonDeserializer<>()` rely entirely on that header and will break when the
+outbox rolls out to the remaining publishers.
+
+export-service sets `setUseTypeHeaders(false)` explicitly for this reason.
+
+### Two diagnostic notes
+
+**`./mvnw -q dependency:tree` prints nothing** — the plugin logs at INFO and `-q`
+suppresses it. Reading empty output as "dependency missing" cost a round.
+
+**Locating a class across Spring's module split:**
+
+```bash
+./mvnw -q dependency:build-classpath -Dmdep.outputFile=/tmp/cp.txt
+for j in $(tr ':' '\n' < /tmp/cp.txt | grep spring-kafka); do
+  unzip -l "$j" | grep -i ClassName
+done
+```
+
+`ExponentialBackOffWithMaxRetries` is in `org.springframework.kafka.support`,
+not `org.springframework.util.backoff` where the name suggests. Two wrong
+guesses before running this.
+
+### Auto-create topics is still on, and it bit
+
+A typo in my test command created `invoice-events.DLT` as an empty topic while
+the real dead letters were going to `invoice-events-dlt`. I then read "topic is
+empty" as "the DLT never worked."
+
+`KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"` means a mistyped topic name silently
+creates a new topic rather than failing, and the producer or consumer then talks
+to nothing. Declaring topics as `NewTopic` beans and turning this off is still
+outstanding.
+
+### Also fixed: AutoArchiveScheduler had diverged
+
+It built its own archive event and published only to `invoice-archived`, never
+the `invoice-events` ARCHIVED publish that `archiveInvoice` does. **An
+auto-archived invoice reached archive-service but export-service never learned
+it was archived.** Now delegates to
+`InvoiceService.archiveInvoice(id, archiveType)`.
+
+Also: the cutoff was `minusMonths(1)` against a README claiming six, the whole
+loop was one transaction so one failure rolled back every archive, and
+`jakarta.transaction.Transactional` again.
+
+### Found along the way: unmapped paths returned 500
+
+`NoResourceFoundException` extends `ServletException`, so it landed in
+`BaseExceptionHandler`'s catch-all. **Every mistyped URL on every service
+reported as a server error** — which is why an empty
+`OutboxAdminController.java` took three rounds to diagnose. A 500 says "the
+server broke"; a 404 says "you asked for something that isn't there."
+
+One handler in `common` fixed all five services — the first concrete payoff from
+extracting the base class.
+
+### Still open
+
+- **Four services still publish directly.** customer, import and archive have
+  the dual-write problem invoice-service just fixed.
+- **Only export-service has an inbox.** archive-service and invoice-service's
+  own consumers are not yet idempotent.
+- **The idempotent create path records no event**, so a downstream service that
+  missed the original still cannot recover by retrying the create.
+- **Topics are still auto-created.**

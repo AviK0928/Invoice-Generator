@@ -4,12 +4,14 @@ import com.example.invoice.invoice_service.entity.OutboxEvent;
 import com.example.invoice.invoice_service.repository.OutboxEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
-
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +35,9 @@ public class OutboxDispatcher {
     private static final int MAX_ERROR_LENGTH = 2000;
     private static final int PUBLISH_TIMEOUT_SECONDS = 5;
     private static final int RETENTION_DAYS = 7;
+    public static final String EVENT_ID_HEADER = "X-Event-Id";
+    public static final String EVENT_TYPE_HEADER = "X-Event-Type";
+    private static final String SERVICE_NAME = "invoice-service";
 
     private final OutboxEventRepository repository;
     private final KafkaTemplate<String, String> stringKafkaTemplate;
@@ -68,9 +73,17 @@ public class OutboxDispatcher {
      * before delivery is known, marking rows published that never left.
      */
     private void publish(OutboxEvent event) throws Exception {
-        stringKafkaTemplate
-                .send(event.getTopic(), event.getEventKey(), event.getPayload())
-                .get(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        ProducerRecord<String, String> record = new ProducerRecord<>(
+                event.getTopic(), event.getEventKey(), event.getPayload());
+
+        // Stable, globally unique per event. Consumers key their idempotency
+        // check on this — at-least-once delivery means they will see it again.
+        record.headers().add(EVENT_ID_HEADER,
+                (SERVICE_NAME + ":" + event.getId()).getBytes(StandardCharsets.UTF_8));
+        record.headers().add(EVENT_TYPE_HEADER,
+                event.getEventType().getBytes(StandardCharsets.UTF_8));
+
+        stringKafkaTemplate.send(record).get(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         event.setPublishedAt(LocalDateTime.now());
         event.setLastError(null);
