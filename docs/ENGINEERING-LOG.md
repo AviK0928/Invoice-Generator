@@ -2262,3 +2262,173 @@ broker in-process: no image, no wait strategy, identical behaviour everywhere.
    and only the good invoice persisted
 3. MockMvc tests for the RFC 9457 error contract
 4. JaCoCo with a coverage gate and badge
+
+### The embedded broker moved to the base class, not the test that needed it
+ 
+`@EmbeddedKafka` first went on `OutboxDispatcherIT` alone, on the reasoning that
+only the delivery test needs a broker and the Postgres-only tests should not pay
+for one. That reasoning was wrong twice over.
+ 
+The declaration is part of the context key. Putting it on one subclass gave the
+two test classes different `MergedContextConfiguration`s, so Spring built two
+contexts: two Flyway runs, two Hibernate bootstraps, two sets of listener
+containers. The measured cost of the "cheap" broker-less context was 11 seconds,
+against roughly 2 for an in-process broker that the other context was already
+paying to start.
+ 
+And the broker-less context was not free either. `KafkaTopicConfig` declares
+`NewTopic` beans, so `KafkaAdmin` tries to reconcile them at startup regardless
+of whether any test publishes. With `bootstrap-servers` pointing at nothing on
+purpose, every startup burned the full `operation-timeout` and logged a
+`Could not configure topics` stack trace that looked exactly like a real
+failure. The test profile then suppressed `org.apache.kafka` to `ERROR` to hide
+it — which also hid the genuine broker errors, and the comment in the YAML said
+so.
+ 
+Moving both the container and the broker to `IntegrationTest` collapses the run
+to one context, one schema load, one broker, and no suppressed logging.
+ 
+### Auto-create is off in the test broker too
+ 
+`@EmbeddedKafka(brokerProperties = "auto.create.topics.enable=false")`, with all
+eight topics — five real, three DLT — declared in the annotation. Phase 3 turned
+auto-create off on the deployed broker so a typo in a topic name fails loudly
+instead of silently creating a second topic that nothing reads. A test broker
+with auto-create on would make the tests the one place that typo survives.
+ 
+### The scheduler had to stop running for the test to be a test
+ 
+The first version of the delivery test created an invoice, asserted one
+unpublished row, and awaited the row going published while the `@Scheduled`
+dispatcher polled every 200ms.
+ 
+With the broker unreachable that test failed honestly. With the broker working
+it becomes a race it can lose: the assertion that the row is *recorded but not
+yet sent* is only true for as long as the dispatcher has not fired, and the
+dispatcher fires every 200ms. Worse, in a single shared context the dispatcher
+keeps polling the same database for the whole run, writing to the table every
+other test asserts on.
+ 
+So the test profile parks `outbox.poll-interval-ms` an hour out and the test
+calls `dispatcher.dispatch()` directly. That `@Scheduled` fires is Spring's
+problem and is not worth a 15-second Awaitility budget to confirm. What is worth
+pinning is what `dispatch()` does when it runs, and now that there is a real
+broker in the JVM the test can assert the thing that actually matters: the
+record arrives on `invoice-events` with the aggregate id as its key and the
+`X-Event-Id` and `X-Event-Type` headers consumers key their idempotency on.
+The old test asserted only that a column changed — it would have passed against
+a producer that published nothing and set `published_at` anyway.
+ 
+`max-attempts` went back to 3 at the same time. It was raised to 100 so that
+exponential backoff would not exhaust the retry budget inside the test's 15
+second window — a number chosen to work around a race that no longer exists.
+Nothing retries in a test any more: a send that fails is a failure.
+ 
+### Remaining
+ 
+1. Tests for the other four services — the import isolation test is the most
+   valuable: one bad row, one good, assert `successCount: 1 / failureCount: 1`
+   and only the good invoice persisted
+2. MockMvc tests for the RFC 9457 error contract
+3. JaCoCo with a coverage gate and badge
+
+### The embedded broker belongs on the base class, not the test that needs it
+
+`@EmbeddedKafka` first went on `OutboxDispatcherIT` alone, reasoning that only
+the delivery test needs a broker and the Postgres-only tests should not pay for
+one. Wrong twice over.
+
+The declaration is part of the context cache key. On one subclass it gave the
+two IT classes different `MergedContextConfiguration`s, so Spring built two
+contexts: two Flyway runs, two Hibernate bootstraps, two sets of listener
+containers. Measured cost of the "cheap" broker-less context was 11s, against
+~2s for an in-process broker the other context was already starting.
+
+The broker-less context was not free either. `KafkaTopicConfig` declares
+`NewTopic` beans, so `KafkaAdmin` reconciles them at startup whether or not a
+test publishes. With `bootstrap-servers` pointing at nothing on purpose, every
+startup logged a `Could not configure topics` stack trace indistinguishable
+from a real failure — which is why the test profile had `org.apache.kafka`
+pinned to `ERROR`, hiding genuine broker errors along with it.
+
+Both moved to `IntegrationTest`. One context, one schema load, one broker, and
+the logging went back to `WARN`. Failsafe for the pair: 51.6s → 20.8s, with
+`InvoiceServiceIT` at 0.36s on the cached context.
+
+### Auto-create is off in the test broker too
+
+`@EmbeddedKafka(brokerProperties = "auto.create.topics.enable=false")` with all
+eight topics — five real, three DLT — listed in the annotation. Phase 3 turned
+auto-create off on the deployed broker so a topic-name typo fails loudly
+instead of silently creating a topic nothing reads. A test broker with
+auto-create on would make the tests the one place that typo survives.
+
+### The scheduler had to stop running for the test to be a test
+
+First version created an invoice, asserted one unpublished row, then awaited
+the row going published while the `@Scheduled` dispatcher polled every 200ms.
+
+Against a broken broker that failed honestly. Against a working one it becomes
+a race it can lose: "recorded but not yet sent" is only true until the
+dispatcher fires, and it fires every 200ms. Worse, in a single shared context
+the dispatcher keeps polling the same database for the whole run, writing to
+the table every other test asserts on.
+
+So the test profile parks `outbox.poll-interval-ms` an hour out and the test
+calls `dispatcher.dispatch()` directly. That `@Scheduled` fires is Spring's
+problem, not worth a 15s Awaitility budget. What is worth pinning is what
+`dispatch()` does — and with a real broker in the JVM the test can now assert
+the record arriving on `invoice-events` with the aggregate id as key and the
+`X-Event-Id` / `X-Event-Type` headers consumers key idempotency on. The old
+assertion checked only that a column changed; it would have passed against a
+producer that published nothing and set `published_at` anyway.
+
+`max-attempts` went back to 3 at the same time. 100 was chosen so exponential
+backoff would not exhaust the budget inside the 15s window — a workaround for a
+race that no longer exists.
+
+### `operation-timeout: 5` meant five milliseconds
+
+Even with the broker working and every topic present, every startup still
+logged `Could not configure topics` / `Timed out waiting to get existing
+topics`. The test passed anyway, which was the tell: the producer and the test
+consumer reached the broker fine while `KafkaAdmin` could not.
+
+An assertion settled it in one run — `spring.kafka.bootstrap-servers` equals
+`broker.getBrokersAsString()`, so all three clients were pointed at the same
+place and the two-broker theory died. The timestamps said the rest: the error
+landed 327ms before `Started ...`, not the 5 seconds the config implied.
+
+`KafkaProperties.Admin.operationTimeout` binds as a `Duration` with no
+`@DurationUnit`, so a bare `5` is **five milliseconds**. No `describeTopics`
+round trip completes in 5ms; it timed out against a healthy broker every time.
+`operation-timeout: 10s` and the error is gone.
+
+The property was added for a real symptom — 30s of blocked startup per context
+with no broker — and it did fix it, by making the operation impossible rather
+than by shortening a wait. That was unfalsifiable under the old design: no
+broker was reachable anyway, so a timeout was the expected outcome, and the
+log suppression hid it. It only became visible once a real broker was always
+present.
+
+**Two lessons.** A config value that fixes a symptom is not thereby correct.
+And unsuffixed durations in Spring Boot are milliseconds unless the property
+declares otherwise — assume nothing, write the unit.
+
+### Known state, not chased
+
+The embedded broker starts in **ZooKeeper** mode, not KRaft — hence the
+`maxCnxns is not configured` warning and ~2.5s before the Spring banner.
+`@EmbeddedKafka` should default to `kraft = true` on spring-kafka 3.3.7, so
+something is selecting ZK and it is not yet known what. Works fine; ZooKeeper is
+removed in Kafka 4.x, so this is an upgrade blocker to revisit, not a present
+defect.
+
+### Remaining
+
+1. Tests for the other four services — the import isolation test is the most
+   valuable: one bad row, one good, assert `successCount: 1 / failureCount: 1`
+   and only the good invoice persisted
+2. MockMvc tests for the RFC 9457 error contract
+3. JaCoCo with a coverage gate and badge
+4. Why `@EmbeddedKafka` selects the ZooKeeper broker over KRaft

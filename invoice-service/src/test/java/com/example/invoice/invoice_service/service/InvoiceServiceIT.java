@@ -23,14 +23,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Postgres only — no broker needed. Delivery is covered by OutboxDispatcherIT.
+ * Recording only: that the event is written in the same transaction as the
+ * invoice. Delivery is covered by OutboxDispatcherIT. The dispatcher is not
+ * running here — the test profile parks its poll interval an hour out — so
+ * these rows stay unpublished for the life of the test.
  */
 class InvoiceServiceIT extends IntegrationTest {
 
-    @Autowired InvoiceService invoiceService;
-    @Autowired InvoiceRepository invoiceRepository;
-    @Autowired LocalCustomerRepository customerRepository;
-    @Autowired OutboxEventRepository outboxRepository;
+    @Autowired
+    InvoiceService invoiceService;
+    @Autowired
+    InvoiceRepository invoiceRepository;
+    @Autowired
+    LocalCustomerRepository customerRepository;
+    @Autowired
+    OutboxEventRepository outboxRepository;
 
     @BeforeEach
     void seed() {

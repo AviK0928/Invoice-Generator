@@ -22,22 +22,24 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
           cache: maven
 
-      # verify runs Surefire (unit) then Failsafe (integration). Testcontainers
-      # works out of the box here: the runner has a plain Docker daemon, unlike
-      # the Codespace's docker-in-docker. This is where OutboxDispatcherIT
-      # actually runs — it is skipped locally via @EnabledIfEnvironmentVariable
-      # on CI, which Actions sets automatically.
+      # verify runs Surefire (unit) then Failsafe (integration). The Postgres
+      # Testcontainer works out of the box here: the runner has a plain Docker
+      # daemon, unlike the Codespace's docker-in-docker. The broker is
+      # @EmbeddedKafka and needs no daemon at all.
+      #
+      # -ntp drops Maven's download progress lines, which were 90% of a 436 KB
+      # log and made the real failure hard to find.
       - name: Build and test
-        run: ./mvnw -B clean verify
+        run: ./mvnw -B -ntp clean verify
 
       - name: Publish test report
         if: always()
         uses: mikepenz/action-junit-report@v5
         with:
-          report_paths: '**/target/*-reports/TEST-*.xml'
+          report_paths: "**/target/*-reports/TEST-*.xml"
           check_name: Test results
 
       - name: Upload artifacts
@@ -45,7 +47,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-reports
-          path: '**/target/*-reports/'
+          path: "**/target/*-reports/"
           retention-days: 5
 
   docker:

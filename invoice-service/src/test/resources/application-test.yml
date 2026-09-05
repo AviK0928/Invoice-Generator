@@ -11,33 +11,32 @@ spring:
         clean-disabled: false
 
     kafka:
-        # Overridden by @ServiceConnection when a Kafka container is present.
-        # The default only applies to the Postgres-only tests, where it points
-        # at nothing on purpose.
+        # Overridden by the @TestPropertySource on IntegrationTest, which points
+        # at the embedded broker. The default is a placeholder for anything that
+        # somehow runs outside that base class.
         bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
         consumer:
             group-id: invoice-service-test
             auto-offset-reset: earliest
         admin:
-            # A missing broker must not fail context startup — the Postgres-only
-            # tests have none. Topic creation stays ENABLED: the Testcontainers
-            # broker has auto-create off, so without KafkaAdmin creating the
-            # declared NewTopic beans the dispatcher publishes to a topic that
-            # does not exist and fails with "not present in metadata".
+            # The unit is mandatory. operationTimeout binds as a Duration with
+            # no @DurationUnit, so a bare "5" is five MILLISECONDS — every
+            # describeTopics times out and logs "Could not configure topics"
+            # against a broker that is up and reachable.
             fail-fast: false
-            # Default is 30s. Under docker-in-docker the broker is unreachable
-            # and every context startup blocked for the full timeout, adding
-            # ~30s per test class for no benefit.
-            operation-timeout: 5
+            operation-timeout: 10s
 
-# Fast polling: tests should not wait 2 seconds per dispatch cycle.
+# The dispatcher is invoked directly by OutboxDispatcherIT. It must not also run
+# on a schedule: Spring caches one context for the whole run, so a background
+# dispatcher polls the same database every other test asserts on and wins races
+# against them. An hour is "never" for a test run without special-casing
+# @Scheduled.
 outbox:
-    poll-interval-ms: 200
+    poll-interval-ms: 3600000
     batch-size: 100
-    # High enough that the dispatcher never abandons inside a test's timeout.
-    # At 3, exponential backoff exhausts the budget in ~14s and races the 15s
-    # await in OutboxDispatcherIT.
-    max-attempts: 100
+    # Production default. Nothing here retries — a send that fails in a test is
+    # a failure, not something to sit through a backoff for.
+    max-attempts: 3
     cleanup-cron: "-"
 
 # Never run during tests.
@@ -54,12 +53,12 @@ logging:
     level:
         root: WARN
         com.example.invoice: INFO
-        # Suppresses the NetworkClient connection warnings the Postgres-only
-        # tests produce while KafkaAdmin retries against nothing, and the
-        # LoggingProducerListener errors from the dispatcher's failed sends.
-        #
-        # Note this also hides genuine Kafka failures. If the CI-only
-        # dispatcher test fails, re-run with -Dlogging.level.org.apache.kafka=WARN
-        # to see what the broker is actually saying.
-        org.apache.kafka: ERROR
-        org.springframework.kafka: ERROR
+        # The embedded broker and its clients are chatty at INFO and silent at
+        # WARN unless something is actually wrong. These were pinned to ERROR
+        # while the broker was unreachable by design, which also hid genuine
+        # failures; there is no longer a reason to hide them.
+        kafka: WARN
+        org.apache.kafka: WARN
+        org.springframework.kafka: WARN
+        # Broker-internal state churn on startup. Noise, not diagnostics.
+        state.change.logger: ERROR
