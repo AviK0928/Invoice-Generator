@@ -2516,3 +2516,68 @@ before any import, so there is no partial success to report. That is a
 different contract from the per-invoice failures above, and a caller cannot
 treat the two the same way. Pinned so the difference is deliberate rather than
 incidental.
+
+## Phase 4 (continued) — the RFC 9457 error contract
+
+Six MockMvc tests on `customer-service`, the first tests in that module. They
+cover the shared `BaseExceptionHandler` in `common` through
+`customer-service`'s concrete `GlobalExceptionHandler` — the arrangement that
+ships. `common` has no test harness and adding one to a library module that
+builds in ten seconds was not worth it; testing the abstract class alone would
+also not prove a subclass registers its inherited handlers.
+
+`*Test`, not `*IT`: `@WebMvcTest` needs no Docker, so these run under Surefire
+in `test` and add about a second.
+
+Four of the six pin behaviour inherited from `common` and would break for all
+six services at once: validation field errors, malformed body, type mismatch,
+and the catch-all. Two are `customer-service`'s own — not-found and duplicate
+email. The malformed-body and type-mismatch cases are the ones Phase 3 fixed
+when unmapped and unparseable requests were returning 500; nothing stopped that
+regressing until now.
+
+### The most valuable test asserts an absence
+
+`unexpectedExceptionIsOpaque` throws `IllegalStateException("connection string:
+user:hunter2@db")` from the service and asserts the response body does **not**
+contain `hunter2`. The run log shows `BaseExceptionHandler` logging the full
+message server-side while the client receives only "An unexpected error
+occurred." That is the entire point of the catch-all, and it is a security
+property rather than a formatting preference.
+
+### @WebMvcTest and a @SpringBootApplication that owns explicit registrars
+
+`CustomerServiceApplication` carries `@EnableJpaRepositories`,
+`@EnableScheduling` and `@Import(OutboxConfiguration)`. `@WebMvcTest` excludes
+JPA *auto-configuration*, but the explicit annotations survive, so the
+bootstrapper finding the application class fails the context for want of a
+`DataSource`. A nested `@SpringBootConfiguration` stops it walking up. Getting
+that nested config right took three attempts:
+
+1. **Scan only the advice, `useDefaultFilters = false`.** `@WebMvcTest(controllers
+   = X)` *filters* an existing scan; it does not register the controller
+   itself. Nothing mapped `/api/customers`, every request fell through to
+   `ResourceHttpRequestHandler`, and all six tests got a `no-such-endpoint`
+   404. The advice *was* registered — the 404s came back as correct
+   `application/problem+json`, which is what made the cause legible.
+2. **Scan the service root package.** The scan found
+   `CustomerServiceApplication` as a component and re-processed its
+   annotations. `@EnableJpaRepositories` came back and the context died on
+   `No bean named 'entityManagerFactory' available`.
+3. **Scan `controller` and `exception` only.** Both web components found,
+   application class never visited.
+
+**The lesson:** `TypeExcludeFilter` filters scanned *components*. It does not
+undo bean definitions registered by annotations on a class that the scan
+happens to find. A `@SpringBootApplication` caught in a component scan brings
+its entire configuration with it, slice or no slice.
+
+Also worth knowing: `MockMvc`'s failure dump prints `Handler: Type`. When that
+reads `ResourceHttpRequestHandler` instead of your controller, the mapping is
+missing and no amount of reading the assertion error will tell you that.
+
+### Free finding
+
+`ProblemDetail` populates `instance` with the request path automatically —
+`BaseExceptionHandler.problem` never sets it. It showed up in the dump before
+anything asserted it. Now asserted in the not-found test, since clients see it.
