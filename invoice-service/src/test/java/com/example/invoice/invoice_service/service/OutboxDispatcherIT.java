@@ -1,8 +1,9 @@
 package com.example.invoice.invoice_service.service;
 
 import com.example.invoice.common.enums.PaymentStatus;
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.outbox.OutboxEventRepository;
-import com.example.invoice.invoice_service.KafkaIntegrationTest;
+import com.example.invoice.invoice_service.IntegrationTest;
 import com.example.invoice.invoice_service.dto.InvoiceItemDTO;
 import com.example.invoice.invoice_service.dto.InvoiceRequestDTO;
 import com.example.invoice.invoice_service.entity.LocalCustomer;
@@ -11,8 +12,9 @@ import com.example.invoice.invoice_service.repository.LocalCustomerRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -22,7 +24,22 @@ import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-class OutboxDispatcherIT extends KafkaIntegrationTest {
+/**
+ * The delivery leg of the outbox. Recording is covered by InvoiceServiceIT,
+ * which needs no broker.
+ *
+ * Uses @EmbeddedKafka rather than a Testcontainers broker. Testcontainers
+ * 1.21.2 reports apache/kafka-native as started in under half a second — its
+ * wait strategy passes before the broker is listening, so KafkaAdmin times out
+ * fetching topics and the producer never resolves metadata. That happens on a
+ * plain GitHub Actions daemon too, so it is not a docker-in-docker quirk.
+ *
+ * The embedded broker runs in-process: no image, no wait strategy, and it works
+ * identically everywhere.
+ */
+@EmbeddedKafka(partitions = 1, topics = { Topics.INVOICE_EVENTS, Topics.INVOICE_ARCHIVED })
+@TestPropertySource(properties = "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}")
+class OutboxDispatcherIT extends IntegrationTest {
 
     @Autowired
     InvoiceService invoiceService;
@@ -43,20 +60,14 @@ class OutboxDispatcherIT extends KafkaIntegrationTest {
     }
 
     @Test
-    @EnabledIfEnvironmentVariable(named = "CI", matches = "true", disabledReason = """
-            The Kafka container starts but is unreachable from inside
-            docker-in-docker: KafkaAdmin times out fetching topics and
-            the producer cannot resolve invoice-events in metadata.
-            GitHub Actions runners have a plain Docker daemon, where
-            this works.
-            """)
     @DisplayName("the dispatcher publishes recorded events")
     void dispatcherPublishesEvents() {
         invoiceService.createInvoice(request());
 
+        // Recorded but not yet sent — the dispatcher runs on a schedule.
         assertThat(outboxRepository.countByPublishedAtIsNull()).isOne();
 
-        // The dispatcher polls every 200ms under the test profile.
+        // Polls every 200ms under the test profile.
         await().atMost(ofSeconds(15))
                 .untilAsserted(() -> assertThat(outboxRepository.countByPublishedAtIsNull()).isZero());
     }

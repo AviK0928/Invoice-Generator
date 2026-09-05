@@ -107,3 +107,24 @@ link should not depend on a provider that changes terms silently and enforces by
 termination.
 
 *Deploy three of six.* Arbitrary. No principled basis for which three.
+
+LATEST OVERRIDES ANYTHING THAT IS CONFLICTORY ABOVE
+
+*Oracle Cloud Always Free.* Previously 4 OCPU / 24 GB, which would have hosted
+the full six-service topology comfortably. **Halved to 2 OCPU / 12 GB on
+15 June 2026** with no announcement — the documentation was edited, and
+instances above the new limit were terminated from 18 August. RAM would still
+fit at roughly 5.3 GB; two cores would not start six JVMs comfortably, being the
+same CPU budget as the Codespace where six simultaneous starts pegged both cores.
+
+Rejected primarily on a different ground: a portfolio link should not depend on
+a provider that changes terms silently and enforces by termination. A dead link
+is worse than a modest one.
+
+And add to Consequences:
+
+
+**The distributed topology has never run on a hosted environment.** It runs
+locally under Docker Compose and is verified there, but "works on my machine"
+is the honest description of its deployment status. `docs/DEPLOYMENT.md`
+documents the path; it has not been walked.

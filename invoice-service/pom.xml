@@ -120,11 +120,6 @@
 			<artifactId>postgresql</artifactId>
 			<scope>test</scope>
 		</dependency>
-		<dependency>
-			<groupId>org.testcontainers</groupId>
-			<artifactId>kafka</artifactId>
-			<scope>test</scope>
-		</dependency>
 		<!-- Provides @ServiceConnection, which wires the datasource and
 		     bootstrap servers from the containers with no @DynamicPropertySource. -->
 		<dependency>

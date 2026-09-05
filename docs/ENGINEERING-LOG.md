@@ -2209,3 +2209,56 @@ returned `500 "Send failed"` and saved nothing.
   `errorHandler`/`dltKafkaTemplate`. Both belong in `common` now the pattern has
   settled.
 - **`invoice-imported` and `invoice-delete`** each have one end.
+
+---
+
+## Phase 4 — Testing (in progress)
+
+Twelve tests on invoice-service. Seven unit tests pin the content hasher — order
+independence, `BigDecimal` scale normalisation, and the deliberate exclusion of
+`paymentStatus`. Five integration tests against a Postgres Testcontainer cover
+creation with a content hash, idempotent create, outbox recording in the same
+transaction, and rejection of an unknown customer leaving nothing written.
+
+`*IT` classes run under **Failsafe** in `verify`; `*Test` under Surefire in
+`test`. Failsafe executions are declared per service POM because the root POM is
+an aggregator, not a parent.
+
+### Testcontainers' Kafka container does not work
+
+Three separate failures, in order:
+
+1. `org.testcontainers.containers.KafkaContainer` expects Confluent images and
+   rejects `apache/kafka`. Fixed by the newer `org.testcontainers.kafka.KafkaContainer`.
+2. That produced an invalid `advertised.listeners` for `apache/kafka:3.9.0` —
+   the broker refused to start with "cannot use the nonroutable meta-address
+   0.0.0.0". Fixed by pinning to 3.8.0.
+3. `apache/kafka-native:3.8.0` reports **started in 0.44 seconds**. The wait
+   strategy passes before the broker is listening, so `KafkaAdmin` times out
+   fetching topics and the producer never resolves metadata.
+
+Failure 3 happens **on a plain GitHub Actions daemon as well**, which ruled out
+the docker-in-docker theory that had absorbed most of the debugging.
+
+Replaced with `@EmbeddedKafka` from `spring-kafka-test`, which runs a real
+broker in-process: no image, no wait strategy, identical behaviour everywhere.
+
+### Other environment notes
+
+- `~/.testcontainers.properties` with `api.version=1.43` and
+  `docker.host=unix:///var/run/docker.sock` is required in the Codespace;
+  Testcontainers 1.21 negotiates API 1.32 and docker-in-docker needs 1.40+.
+  Scoped to a `!env.CI` Maven profile so it does not apply on Actions.
+- `spring.kafka.admin.operation-timeout: 5` in the test profile. The 30s default
+  blocked every context startup by that long when no broker was present.
+- `maven.compiler.parameters` in `common/pom.xml` — the plugin's
+  `<compilerArgs>` block did **not** work; the property did.
+
+### Remaining
+
+1. CI green (blocked on the `@EmbeddedKafka` change above)
+2. Tests for the other four services — the import isolation test is the most
+   valuable: one bad row, one good, assert `successCount: 1 / failureCount: 1`
+   and only the good invoice persisted
+3. MockMvc tests for the RFC 9457 error contract
+4. JaCoCo with a coverage gate and badge
