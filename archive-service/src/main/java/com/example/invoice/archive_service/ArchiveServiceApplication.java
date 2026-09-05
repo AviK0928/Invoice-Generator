@@ -1,5 +1,7 @@
 package com.example.invoice.archive_service;
 
+import com.example.invoice.common.kafka.KafkaErrorHandlingConfiguration;
+import com.example.invoice.common.kafka.KafkaProducerConfiguration;
 import com.example.invoice.common.outbox.OutboxConfiguration;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -16,7 +18,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @SpringBootApplication
 @EnableScheduling
-@Import(OutboxConfiguration.class)
+@Import({ OutboxConfiguration.class,
+		KafkaProducerConfiguration.class,
+		KafkaErrorHandlingConfiguration.class })
 // @EntityScan REPLACES the default rather than adding to it — omit this
 // service's own package and every entity silently disappears.
 @EntityScan(basePackages = {

@@ -1,4 +1,4 @@
-package com.example.invoice.customer_service.config;
+package com.example.invoice.common.kafka;
 
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -13,21 +13,21 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * A single String producer, used only by the outbox dispatcher.
+ * The producer used by the outbox dispatcher.
  *
- * The typed CustomerEventDTO template is gone: nothing publishes directly any
- * more. Events are serialised to JSON when recorded in the outbox and
- * dispatched as pre-serialised strings, so the producer needs no knowledge of
- * the payload types.
+ * Nothing publishes directly any more — events are serialised to JSON when
+ * recorded in the outbox and dispatched as pre-serialised strings, so the
+ * producer needs no knowledge of payload types and is identical in every
+ * service.
  */
 @Configuration
-public class KafkaProducerConfig {
+public class KafkaProducerConfiguration {
 
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
 
     @Bean
-    public ProducerFactory<String, String> producerFactory() {
+    public ProducerFactory<String, String> outboxProducerFactory() {
         Map<String, Object> config = new HashMap<>();
         config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -40,7 +40,7 @@ public class KafkaProducerConfig {
         config.put(ProducerConfig.ACKS_CONFIG, "all");
         config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
 
-        // Fail fast rather than block. max.block.ms defaults to 60s, and the
+        // Fail fast rather than block. max.block.ms defaults to 60s and the
         // dispatcher retries on its next poll anyway, so a long block only
         // stalls the batch behind an unreachable broker. These sit below the
         // dispatcher's own 5s send timeout.

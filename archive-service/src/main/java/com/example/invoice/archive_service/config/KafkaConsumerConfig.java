@@ -2,27 +2,17 @@ package com.example.invoice.archive_service.config;
 
 import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
-import org.springframework.kafka.core.DefaultKafkaProducerFactory;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
-import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
-import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
-import org.springframework.kafka.support.serializer.JsonSerializer;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -73,44 +63,5 @@ public class KafkaConsumerConfig {
         factory.setConsumerFactory(archiveEventConsumerFactory());
         factory.setCommonErrorHandler(errorHandler);
         return factory;
-    }
-
-    /**
-     * Retries with backoff, then routes to {topic}-dlt rather than discarding.
-     * Without this a failed event is retried briefly, the offset is committed,
-     * and the message is gone with no record it ever failed.
-     */
-    @Bean
-    public DefaultErrorHandler errorHandler(KafkaTemplate<Object, Object> dltKafkaTemplate) {
-        ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(5);
-        backOff.setInitialInterval(1000);
-        backOff.setMultiplier(2.0);
-        backOff.setMaxInterval(30_000);
-
-        DefaultErrorHandler handler = new DefaultErrorHandler(
-                new DeadLetterPublishingRecoverer(dltKafkaTemplate), backOff);
-        handler.setLogLevel(KafkaException.Level.ERROR);
-        return handler;
-    }
-
-    /**
-     * Delegates by type on both key and value: a record that failed
-     * deserialization arrives as raw bytes and must be republished verbatim,
-     * while one that deserialized but failed processing is JSON.
-     */
-    @Bean
-    public KafkaTemplate<Object, Object> dltKafkaTemplate() {
-        Map<String, Object> config = new HashMap<>();
-        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-
-        DefaultKafkaProducerFactory<Object, Object> factory = new DefaultKafkaProducerFactory<>(config,
-                new DelegatingByTypeSerializer(Map.of(
-                        byte[].class, new ByteArraySerializer(),
-                        Object.class, new StringSerializer())),
-                new DelegatingByTypeSerializer(Map.of(
-                        byte[].class, new ByteArraySerializer(),
-                        Object.class, new JsonSerializer<>())));
-
-        return new KafkaTemplate<>(factory);
     }
 }

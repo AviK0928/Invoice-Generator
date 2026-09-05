@@ -2,23 +2,16 @@ package com.example.invoice.export_service.config;
 
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.*;
-import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
-import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
-import org.springframework.kafka.support.serializer.JsonSerializer;
-import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -42,7 +35,7 @@ public class KafkaConsumerConfig {
         delegate.setUseTypeHeaders(false);
 
         Map<String, Object> config = new HashMap<>();
-        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        config.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         config.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
@@ -62,49 +55,5 @@ public class KafkaConsumerConfig {
         factory.setConsumerFactory(invoiceEventConsumerFactory());
         factory.setCommonErrorHandler(errorHandler);
         return factory;
-    }
-
-    /**
-     * Retries with backoff, then routes to {topic}.DLT rather than discarding.
-     *
-     * Previously a failed event was retried briefly, the offset was committed,
-     * and the message was gone — no record it ever failed, no way to replay.
-     */
-    @Bean
-    public DefaultErrorHandler errorHandler(KafkaTemplate<Object, Object> dltKafkaTemplate) {
-        ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(5);
-        backOff.setInitialInterval(1000);
-        backOff.setMultiplier(2.0);
-        backOff.setMaxInterval(30_000);
-
-        DefaultErrorHandler handler = new DefaultErrorHandler(
-                new DeadLetterPublishingRecoverer(dltKafkaTemplate), backOff);
-        handler.setLogLevel(org.springframework.kafka.KafkaException.Level.ERROR);
-        return handler;
-    }
-
-    /**
-     * Serialises by type: a record that failed deserialization arrives as
-     * byte[] and must be republished verbatim, while one that deserialized but
-     * failed processing is JSON.
-     */
-    @Bean
-    public KafkaTemplate<Object, Object> dltKafkaTemplate() {
-        Map<String, Object> config = new HashMap<>();
-        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-
-        // Explicit type arguments: DelegatingByTypeSerializer is
-        // Serializer<Object>, so inference from a Serializer<String> key fails.
-        // The key delegates too — a record that failed deserialization has a
-        // byte[] key, not a String.
-        DefaultKafkaProducerFactory<Object, Object> factory = new DefaultKafkaProducerFactory<>(config,
-                new DelegatingByTypeSerializer(Map.of(
-                        byte[].class, new ByteArraySerializer(),
-                        Object.class, new StringSerializer())),
-                new DelegatingByTypeSerializer(Map.of(
-                        byte[].class, new ByteArraySerializer(),
-                        Object.class, new JsonSerializer<>())));
-
-        return new KafkaTemplate<>(factory);
     }
 }
