@@ -90,8 +90,11 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      # Turn off once topics are declared as NewTopic beans (Phase 3).
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Topics are declared as NewTopic beans by the services that own them.
+      # With auto-create on, a typo silently makes a new topic and the producer
+      # or consumer then talks to nothing — which is how invoice-events.DLT
+      # appeared during DLT testing.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 10s

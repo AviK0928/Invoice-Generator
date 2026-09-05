@@ -4,15 +4,27 @@ import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.common.kafka.dto.CustomerEventDTO;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
+import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.kafka.support.serializer.JsonSerializer;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -40,47 +52,102 @@ public class KafkaConsumerConfig {
         return props;
     }
 
-    private <T> ConsumerFactory<String, T> consumerFactory() {
-        JsonDeserializer<T> deserializer = new JsonDeserializer<>();
+    private <T> ConsumerFactory<String, T> consumerFactory(Class<T> targetType) {
+        JsonDeserializer<T> deserializer = new JsonDeserializer<>(targetType);
         deserializer.addTrustedPackages(TRUSTED_PACKAGES);
-        return new DefaultKafkaConsumerFactory<>(
-                baseConfig(), new StringDeserializer(), deserializer);
+        // The outbox publishes pre-serialised strings with no __TypeId__
+        // header, so the target type must be explicit.
+        deserializer.setUseTypeHeaders(false);
+
+        // ErrorHandlingDeserializer is load-bearing: without it a malformed
+        // message fails before the listener is reached, the error handler never
+        // sees it, and the container retries the same record forever.
+        return new DefaultKafkaConsumerFactory<>(baseConfig(),
+                new ErrorHandlingDeserializer<>(new StringDeserializer()),
+                new ErrorHandlingDeserializer<>(deserializer));
     }
 
     private <T> ConcurrentKafkaListenerContainerFactory<String, T> listenerFactory(
-            ConsumerFactory<String, T> consumerFactory) {
+            ConsumerFactory<String, T> consumerFactory, DefaultErrorHandler errorHandler) {
         ConcurrentKafkaListenerContainerFactory<String, T> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
+        factory.setCommonErrorHandler(errorHandler);
         return factory;
     }
 
+    // ------------------------------------------------------- error handling
+
+    /**
+     * Retries with backoff, then routes to {topic}-dlt rather than discarding.
+     * Without this a failed event is retried briefly, the offset is committed,
+     * and the message is gone with no record it ever failed.
+     */
+    @Bean
+    public DefaultErrorHandler errorHandler(KafkaTemplate<Object, Object> dltKafkaTemplate) {
+        ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(5);
+        backOff.setInitialInterval(1000);
+        backOff.setMultiplier(2.0);
+        backOff.setMaxInterval(30_000);
+
+        DefaultErrorHandler handler = new DefaultErrorHandler(
+                new DeadLetterPublishingRecoverer(dltKafkaTemplate), backOff);
+        handler.setLogLevel(KafkaException.Level.ERROR);
+        return handler;
+    }
+
+    /**
+     * Delegates by type on both key and value: a record that failed
+     * deserialization arrives as raw bytes and must be republished verbatim,
+     * while one that deserialized but failed processing is JSON.
+     */
+    @Bean
+    public KafkaTemplate<Object, Object> dltKafkaTemplate() {
+        Map<String, Object> config = new HashMap<>();
+        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+
+        DefaultKafkaProducerFactory<Object, Object> factory = new DefaultKafkaProducerFactory<>(config,
+                new DelegatingByTypeSerializer(Map.of(
+                        byte[].class, new ByteArraySerializer(),
+                        Object.class, new StringSerializer())),
+                new DelegatingByTypeSerializer(Map.of(
+                        byte[].class, new ByteArraySerializer(),
+                        Object.class, new JsonSerializer<>())));
+
+        return new KafkaTemplate<>(factory);
+    }
+
+    // ----------------------------------------------------------- listeners
+
     @Bean
     public ConsumerFactory<String, CustomerEventDTO> customerEventConsumerFactory() {
-        return consumerFactory();
+        return consumerFactory(CustomerEventDTO.class);
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, CustomerEventDTO> customerEventKafkaListenerFactory() {
-        return listenerFactory(customerEventConsumerFactory());
+    public ConcurrentKafkaListenerContainerFactory<String, CustomerEventDTO> customerEventKafkaListenerFactory(
+            DefaultErrorHandler errorHandler) {
+        return listenerFactory(customerEventConsumerFactory(), errorHandler);
     }
 
     @Bean
     public ConsumerFactory<String, ArchiveEventDTO> archiveResponseConsumerFactory() {
-        return consumerFactory();
+        return consumerFactory(ArchiveEventDTO.class);
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, ArchiveEventDTO> archiveResponseKafkaListenerFactory() {
-        return listenerFactory(archiveResponseConsumerFactory());
+    public ConcurrentKafkaListenerContainerFactory<String, ArchiveEventDTO> archiveResponseKafkaListenerFactory(
+            DefaultErrorHandler errorHandler) {
+        return listenerFactory(archiveResponseConsumerFactory(), errorHandler);
     }
 
     @Bean
     public ConsumerFactory<String, InvoiceEventDTO> invoiceDeletionConsumerFactory() {
-        return consumerFactory();
+        return consumerFactory(InvoiceEventDTO.class);
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, InvoiceEventDTO> invoiceDeletionKafkaListenerFactory() {
-        return listenerFactory(invoiceDeletionConsumerFactory());
+    public ConcurrentKafkaListenerContainerFactory<String, InvoiceEventDTO> invoiceDeletionKafkaListenerFactory(
+            DefaultErrorHandler errorHandler) {
+        return listenerFactory(invoiceDeletionConsumerFactory(), errorHandler);
     }
 }

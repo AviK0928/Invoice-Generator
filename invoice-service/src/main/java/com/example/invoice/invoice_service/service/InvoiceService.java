@@ -3,6 +3,7 @@ package com.example.invoice.invoice_service.service;
 import com.example.invoice.common.enums.ArchiveEventType;
 import com.example.invoice.common.enums.InvoiceEventType;
 import com.example.invoice.common.enums.PaymentStatus;
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.common.kafka.dto.ArchiveItemDTO;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
@@ -34,8 +35,8 @@ import java.util.List;
 public class InvoiceService {
 
         private static final String AGGREGATE = "Invoice";
-        private static final String TOPIC_INVOICE_EVENTS = "invoice-events";
-        private static final String TOPIC_INVOICE_ARCHIVED = "invoice-archived";
+        private static final String TOPIC_INVOICE_EVENTS = Topics.INVOICE_EVENTS;
+        private static final String TOPIC_INVOICE_ARCHIVED = Topics.INVOICE_ARCHIVED;
 
         private final InvoiceRepository invoiceRepository;
         private final InvoiceItemRepository invoiceItemRepository;

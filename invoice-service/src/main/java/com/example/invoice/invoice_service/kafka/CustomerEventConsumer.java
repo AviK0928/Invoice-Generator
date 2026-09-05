@@ -1,6 +1,7 @@
 package com.example.invoice.invoice_service.kafka;
 
 import com.example.invoice.common.enums.EventType;
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.CustomerEventDTO;
 import com.example.invoice.invoice_service.entity.LocalCustomer;
 import com.example.invoice.invoice_service.repository.LocalCustomerRepository;
@@ -13,7 +14,7 @@ import org.springframework.stereotype.Component;
 public class CustomerEventConsumer {
 
     private final LocalCustomerRepository customerRepository;
-    private static final String TOPIC = "customer-events";
+    private static final String TOPIC = Topics.CUSTOMER_EVENTS;
     private static final String GROUP_ID = "invoice-service-group";
 
     @KafkaListener(topics = TOPIC, groupId = GROUP_ID, containerFactory = "customerEventKafkaListenerFactory")

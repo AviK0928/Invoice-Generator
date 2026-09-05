@@ -1,5 +1,6 @@
 package com.example.invoice.export_service.kafka;
 
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import com.example.invoice.export_service.service.InvoiceEventHandlerService;
 import lombok.RequiredArgsConstructor;
@@ -18,7 +19,7 @@ public class InvoiceEventConsumer {
      * X-Event-Id is optional: publishers not yet migrated to the outbox send
      * no header, and those events are processed without a dedup check.
      */
-    @KafkaListener(topics = "invoice-events", groupId = "export-service-group", containerFactory = "invoiceEventKafkaListenerFactory")
+    @KafkaListener(topics = Topics.INVOICE_EVENTS, groupId = "export-service-group", containerFactory = "invoiceEventKafkaListenerFactory")
     public void consumeInvoiceEvent(
             InvoiceEventDTO event,
             @Header(name = "X-Event-Id", required = false) String eventId,

@@ -1,6 +1,7 @@
 package com.example.invoice.invoice_service.kafka;
 
 import com.example.invoice.common.enums.InvoiceEventType;
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import com.example.invoice.invoice_service.service.InvoiceService;
 import lombok.RequiredArgsConstructor;
@@ -13,7 +14,7 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class InvoiceDeletionConsumer {
 
-    private static final String TOPIC = "invoice-delete";
+    private static final String TOPIC = Topics.INVOICE_DELETE;
     private static final String GROUP_ID = "invoice-service-group";
     private static final String CONTAINER_FACTORY = "invoiceDeletionKafkaListenerFactory";
 

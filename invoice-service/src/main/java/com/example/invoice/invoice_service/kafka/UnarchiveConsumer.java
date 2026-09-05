@@ -1,6 +1,7 @@
 package com.example.invoice.invoice_service.kafka;
 
 import com.example.invoice.common.enums.ArchiveEventType;
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.invoice_service.repository.InvoiceRepository;
 import lombok.RequiredArgsConstructor;
@@ -13,7 +14,7 @@ public class UnarchiveConsumer {
 
     private final InvoiceRepository invoiceRepository;
 
-    @KafkaListener(topics = "unarchive-invoices", groupId = "invoice-service-group", containerFactory = "archiveResponseKafkaListenerFactory")
+    @KafkaListener(topics = Topics.UNARCHIVE_INVOICES, groupId = "invoice-service-group", containerFactory = "archiveResponseKafkaListenerFactory")
     public void consume(ArchiveEventDTO event) {
         if (event.getEventType() == ArchiveEventType.UNARCHIVE) {
             invoiceRepository.findById(event.getInvoiceId()).ifPresent(invoice -> {

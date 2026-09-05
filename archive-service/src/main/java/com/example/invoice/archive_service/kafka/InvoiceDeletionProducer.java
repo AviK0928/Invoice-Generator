@@ -1,5 +1,6 @@
 package com.example.invoice.archive_service.kafka;
 
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -9,7 +10,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class InvoiceDeletionProducer {
 
-    private static final String TOPIC = "invoice-delete";
+    private static final String TOPIC = Topics.INVOICE_DELETE;
 
     private final KafkaTemplate<String, InvoiceEventDTO> invoiceKafkaTemplate;
 
