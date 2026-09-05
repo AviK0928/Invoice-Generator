@@ -13,6 +13,17 @@
     <name>invoice-generator</name>
     <description>Invoice Generator - multi-module reactor build</description>
 
+    <!--
+      Aggregator only, not a parent: each module keeps
+      spring-boot-starter-parent. The reactor still orders the build by
+      inter-module dependency, so `common` compiles first.
+
+      Promoting this to the real parent is the natural next step — it would let
+      shared plugin and dependency config live in one place instead of five.
+      Deliberately deferred: changing the inheritance of seven modules mid-way
+      through building test infrastructure produces failures that are hard to
+      distinguish from test problems.
+    -->
     <modules>
         <module>common</module>
         <module>api-gateway</module>
@@ -28,5 +39,29 @@
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
+
+    <!--
+      Inert until this POM becomes the actual parent of the services. Declared
+      now so the promotion is a one-line change per module; until then Failsafe
+      is configured in each service POM.
+    -->
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>integration-test</goal>
+                                <goal>verify</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
 
 </project>

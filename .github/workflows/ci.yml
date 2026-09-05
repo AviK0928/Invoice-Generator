@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # verify runs Surefire (unit) then Failsafe (integration). Testcontainers
+      # works out of the box here: the runner has a plain Docker daemon, unlike
+      # the Codespace's docker-in-docker. This is where OutboxDispatcherIT
+      # actually runs — it is skipped locally via @EnabledIfEnvironmentVariable
+      # on CI, which Actions sets automatically.
+      - name: Build and test
+        run: ./mvnw -B clean verify
+
+      - name: Publish test report
+        if: always()
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: '**/target/*-reports/TEST-*.xml'
+          check_name: Test results
+
+      - name: Upload artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '**/target/*-reports/'
+          retention-days: 5
+
+  docker:
+    name: Image (${{ matrix.service }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - customer-service
+          - invoice-service
+          - export-service
+          - import-service
+          - archive-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Proves each image builds from a clean source tree — the thing that was
+      # broken from the start, when every Dockerfile copied a jar from a
+      # target/ directory that does not exist in a fresh clone.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: SERVICE=${{ matrix.service }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

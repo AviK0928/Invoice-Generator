@@ -1,0 +1,65 @@
+spring:
+    jpa:
+        hibernate:
+            ddl-auto: validate
+        show-sql: false
+
+    # Migrations run against the container, so the schema under test is the one
+    # that ships. A separate test schema would defeat the point of validate.
+    flyway:
+        enabled: true
+        clean-disabled: false
+
+    kafka:
+        # Overridden by @ServiceConnection when a Kafka container is present.
+        # The default only applies to the Postgres-only tests, where it points
+        # at nothing on purpose.
+        bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+        consumer:
+            group-id: invoice-service-test
+            auto-offset-reset: earliest
+        admin:
+            # A missing broker must not fail context startup — the Postgres-only
+            # tests have none. Topic creation stays ENABLED: the Testcontainers
+            # broker has auto-create off, so without KafkaAdmin creating the
+            # declared NewTopic beans the dispatcher publishes to a topic that
+            # does not exist and fails with "not present in metadata".
+            fail-fast: false
+            # Default is 30s. Under docker-in-docker the broker is unreachable
+            # and every context startup blocked for the full timeout, adding
+            # ~30s per test class for no benefit.
+            operation-timeout: 5
+
+# Fast polling: tests should not wait 2 seconds per dispatch cycle.
+outbox:
+    poll-interval-ms: 200
+    batch-size: 100
+    # High enough that the dispatcher never abandons inside a test's timeout.
+    # At 3, exponential backoff exhausts the budget in ~14s and races the 15s
+    # await in OutboxDispatcherIT.
+    max-attempts: 100
+    cleanup-cron: "-"
+
+# Never run during tests.
+invoice:
+    auto-archive-cron: "-"
+
+springdoc:
+    api-docs:
+        enabled: false
+    swagger-ui:
+        enabled: false
+
+logging:
+    level:
+        root: WARN
+        com.example.invoice: INFO
+        # Suppresses the NetworkClient connection warnings the Postgres-only
+        # tests produce while KafkaAdmin retries against nothing, and the
+        # LoggingProducerListener errors from the dispatcher's failed sends.
+        #
+        # Note this also hides genuine Kafka failures. If the CI-only
+        # dispatcher test fails, re-run with -Dlogging.level.org.apache.kafka=WARN
+        # to see what the broker is actually saying.
+        org.apache.kafka: ERROR
+        org.springframework.kafka: ERROR
