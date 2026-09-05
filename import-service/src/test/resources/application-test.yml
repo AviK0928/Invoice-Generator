@@ -1,0 +1,44 @@
+spring:
+    jpa:
+        hibernate:
+            ddl-auto: validate
+        show-sql: false
+
+    # Migrations run against the container, so the schema under test is the one
+    # that ships. A separate test schema would defeat the point of validate.
+    flyway:
+        enabled: true
+        clean-disabled: false
+
+    kafka:
+        # Overridden by the @TestPropertySource on IntegrationTest.
+        bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+        admin:
+            # The unit is mandatory. operationTimeout binds as a Duration with
+            # no @DurationUnit, so a bare "5" is five MILLISECONDS — every
+            # describeTopics times out against a broker that is up and healthy.
+            fail-fast: false
+            operation-timeout: 10s
+
+# Nothing here publishes; the importer only records. Parked so a background
+# dispatcher cannot write to the table these tests assert on.
+outbox:
+    poll-interval-ms: 3600000
+    batch-size: 100
+    max-attempts: 3
+    cleanup-cron: "-"
+
+springdoc:
+    api-docs:
+        enabled: false
+    swagger-ui:
+        enabled: false
+
+logging:
+    level:
+        root: WARN
+        com.example.invoice: INFO
+        kafka: WARN
+        org.apache.kafka: WARN
+        org.springframework.kafka: WARN
+        state.change.logger: ERROR

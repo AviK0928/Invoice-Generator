@@ -2432,3 +2432,87 @@ defect.
 2. MockMvc tests for the RFC 9457 error contract
 3. JaCoCo with a coverage gate and badge
 4. Why `@EmbeddedKafka` selects the ZooKeeper broker over KRaft
+
+Regarding Works fine; ZooKeeper is removed in Kafka 4.x, so this is an upgrade blocker to
+revisit, not a present defect. bit
+Confirmed on a GitHub Actions runner as well as the Codespace, so it is the
+configuration and not the environment. Works fine; ZooKeeper is removed in
+Kafka 4.x, so this is an upgrade blocker to revisit, not a present defect.
+
+## Phase 4 (continued) — import-service isolation tests
+
+Three integration tests on `import-service`, the first tests outside
+`invoice-service`. The harness is `invoice-service`'s: Postgres container and
+`@EmbeddedKafka` on a shared `IntegrationTest` base, one topic and no DLTs
+because this service consumes nothing.
+
+`operation-timeout: 10s` carried over deliberately. Writing a bare `5` here
+would have recreated the millisecond trap exactly, in a module where no test
+touches the broker and the resulting error log would have gone unexamined for
+much longer.
+
+Nothing here publishes either — the importer only records outbox rows. The
+broker is present solely because `KafkaTopicConfig` declares a `NewTopic`, so
+`KafkaAdmin` reconciles it at startup whether a test wants a broker or not.
+
+### The obvious bad row tests nothing
+
+The natural fixture for "one bad invoice must not discard the file" is a
+total-amount mismatch. But that check throws *before*
+`invoiceRepository.save(...)`. Nothing is written, so the rollback discards
+nothing, and the test passes identically with `@Transactional` deleted from
+`InvoiceImporter`. It asserts the loop continues — which is worth having — but
+proves nothing about transaction isolation, which is what it looks like it is
+testing.
+
+Switched the failure to `quantity = 0`, which passes the total check, reaches
+`save(...)`, and fails validation.
+
+### A single bad row tests nothing either
+
+That was still wrong, one level down. The stack trace showed the failure at
+`InvoiceImporter:69` — the `save(...)` call itself, not at commit.
+
+`ImportInvoiceItem` uses `GenerationType.IDENTITY`, so Hibernate cannot defer
+the item insert; it needs the generated key. The insert executes during the
+cascade, and `BeanValidationEventListener.onPreInsert` throws before any SQL
+reaches Postgres. With one bad item on the invoice, still nothing was ever
+written, and the rollback still discarded nothing.
+
+Fixed by giving the bad invoice a **valid item first**. That item's identity
+insert forces the parent `import_invoices` row to be inserted — proven by its
+success, since `fk_import_invoice_items_invoice` would have rejected it
+otherwise — so when the second item fails, real rows exist in the transaction
+and the rollback is real.
+
+**The lesson generalises.** A rollback test is only a rollback test if the
+failure happens after a write actually reaches the database. Both earlier
+versions were green, and green for the wrong reason.
+
+### Bean validation wins, the check constraint never fires
+
+`@Min(1)` on the entity throws at `onPreInsert`;
+`ck_import_invoice_items_quantity` in the migration is never reached. The
+constraint is not redundant — it guards writes that bypass JPA — but the entity
+annotation is what is load-bearing at runtime, and it is the entity annotation
+a test like this exercises.
+
+### REQUIRES_NEW is defence, not current behaviour
+
+`InvoiceImporter.importOne` is `@Transactional(REQUIRES_NEW)`, but
+`ImportService.importInvoiceData` is not transactional at all. With no outer
+transaction, `REQUIRES_NEW` and `REQUIRED` behave identically today.
+
+Not a defect and not changed. It is correct as defence: if anyone later
+annotates the caller, `REQUIRES_NEW` preserves per-invoice isolation where
+`REQUIRED` would silently join the outer transaction and let one rollback-only
+marking poison the whole import. Recorded because the javadoc reads as though
+the propagation is doing work right now, and it is not.
+
+### The third case is a different contract
+
+`invoiceId` that will not parse rejects the **whole file** — grouping happens
+before any import, so there is no partial success to report. That is a
+different contract from the per-invoice failures above, and a caller cannot
+treat the two the same way. Pinned so the difference is deliberate rather than
+incidental.
