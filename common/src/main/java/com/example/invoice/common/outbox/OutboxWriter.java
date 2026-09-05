@@ -1,11 +1,8 @@
-package com.example.invoice.invoice_service.service;
+package com.example.invoice.common.outbox;
 
-import com.example.invoice.invoice_service.entity.OutboxEvent;
-import com.example.invoice.invoice_service.repository.OutboxEventRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 
@@ -16,7 +13,6 @@ import java.time.LocalDateTime;
  * entire point. The event and the state it describes commit together or not at
  * all.
  */
-@Component
 @RequiredArgsConstructor
 public class OutboxWriter {
 

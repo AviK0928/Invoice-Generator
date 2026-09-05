@@ -1,16 +1,13 @@
-package com.example.invoice.invoice_service.service;
+package com.example.invoice.common.outbox;
 
-import com.example.invoice.invoice_service.entity.OutboxEvent;
-import com.example.invoice.invoice_service.repository.OutboxEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -23,11 +20,16 @@ import java.util.concurrent.TimeUnit;
  * events rather than failing writes. Delivery is at-least-once: a publish that
  * succeeds but whose mark-published fails will republish. Consumers must be
  * idempotent.
+ *
+ * Shared by every publishing service. Nothing here is service-specific — the
+ * event-id prefix comes from spring.application.name.
  */
-@Component
 @RequiredArgsConstructor
 @Slf4j
 public class OutboxDispatcher {
+
+    public static final String EVENT_ID_HEADER = "X-Event-Id";
+    public static final String EVENT_TYPE_HEADER = "X-Event-Type";
 
     /** 2^8 = 256s, capped at 300. Reached by roughly the eighth attempt. */
     private static final int MAX_BACKOFF_EXPONENT = 8;
@@ -35,9 +37,6 @@ public class OutboxDispatcher {
     private static final int MAX_ERROR_LENGTH = 2000;
     private static final int PUBLISH_TIMEOUT_SECONDS = 5;
     private static final int RETENTION_DAYS = 7;
-    public static final String EVENT_ID_HEADER = "X-Event-Id";
-    public static final String EVENT_TYPE_HEADER = "X-Event-Type";
-    private static final String SERVICE_NAME = "invoice-service";
 
     private final OutboxEventRepository repository;
     private final KafkaTemplate<String, String> stringKafkaTemplate;
@@ -47,6 +46,10 @@ public class OutboxDispatcher {
 
     @Value("${outbox.max-attempts:300}")
     private int maxAttempts;
+
+    /** Prefixes the event id, so ids are unique across services. */
+    @Value("${spring.application.name}")
+    private String serviceName;
 
     @Scheduled(fixedDelayString = "${outbox.poll-interval-ms:2000}")
     @Transactional
@@ -76,10 +79,10 @@ public class OutboxDispatcher {
         ProducerRecord<String, String> record = new ProducerRecord<>(
                 event.getTopic(), event.getEventKey(), event.getPayload());
 
-        // Stable, globally unique per event. Consumers key their idempotency
+        // Stable and unique across services. Consumers key their idempotency
         // check on this — at-least-once delivery means they will see it again.
         record.headers().add(EVENT_ID_HEADER,
-                (SERVICE_NAME + ":" + event.getId()).getBytes(StandardCharsets.UTF_8));
+                (serviceName + ":" + event.getId()).getBytes(StandardCharsets.UTF_8));
         record.headers().add(EVENT_TYPE_HEADER,
                 event.getEventType().getBytes(StandardCharsets.UTF_8));
 
@@ -100,7 +103,7 @@ public class OutboxDispatcher {
 
         if (attempt >= maxAttempts) {
             log.error("Outbox event {} abandoned after {} attempts (topic={}). "
-                    + "Requeue with POST /api/invoices/admin/outbox/requeue",
+                    + "Requeue via this service's outbox admin endpoint.",
                     event.getId(), attempt, event.getTopic(), e);
         } else {
             log.warn("Outbox event {} failed (attempt {}/{}), retrying in {}s: {}",

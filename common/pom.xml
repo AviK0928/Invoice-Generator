@@ -11,22 +11,33 @@
     <name>common</name>
     <description>Common Module for Invoice Generator</description>
 
+    <!--
+      This module deliberately has no parent, so it is not a Spring Boot
+      application. Two consequences that have both bitten:
+
+      1. java.version alone does nothing — maven.compiler.release is what sets
+         the target. Without it Maven defaults to Java 8 and this module
+         silently compiles to a different level than every other module.
+
+      2. spring-boot-starter-parent's -parameters flag is absent, so argument
+         names are stripped from the bytecode and Spring Data cannot bind
+         named query parameters. Fixed by the compiler plugin below AND by
+         @Param on every repository method — belt and braces, because the
+         failure is at runtime and looks like a query problem.
+
+      The Boot BOM is imported rather than inherited so versions stay aligned
+      with the services.
+    -->
     <properties>
         <java.version>21</java.version>
         <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.parameters>true</maven.compiler.parameters>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <spring-boot.version>3.5.3</spring-boot.version>
+        <openpdf.version>2.0.3</openpdf.version>
+        <commons-csv.version>1.10.0</commons-csv.version>
     </properties>
 
-    <!--
-      This module has no parent, so java.version alone has no effect —
-      maven.compiler.release is what actually sets the target. Without it Maven
-      defaults to Java 8 and this module silently compiles to a different level
-      than every other module.
-
-      The Boot BOM is imported rather than inherited so versions stay aligned
-      with the services without making this a Spring Boot application.
-    -->
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -40,27 +51,12 @@
     </dependencyManagement>
 
     <dependencies>
+
+        <!-- ==================== compile scope ==================== -->
+
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
-            <groupId>com.github.librepdf</groupId>
-            <artifactId>openpdf</artifactId>
-            <version>2.0.3</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-csv</artifactId>
-            <version>1.10.0</version>
         </dependency>
 
         <dependency>
@@ -68,46 +64,92 @@
             <artifactId>jakarta.validation-api</artifactId>
         </dependency>
 
-        <!--
-          Needed to compile BaseExceptionHandler. Scoped provided so this stays
-          a domain library: consumers that do not serve HTTP are not forced to
-          pull in the web stack, and the services already have it via
-          spring-boot-starter-web.
-        -->
+        <!-- Replaces com.lowagie:itext:2.1.7 (2009, unmaintained, known CVEs).
+             Same package names, so no code changed. -->
+        <dependency>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf</artifactId>
+            <version>${openpdf.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>${commons-csv.version}</version>
+        </dependency>
+
+        <!-- optional, not provided: provided removes it from the compile
+             classpath where Maven discovers annotation processors, so Lombok
+             silently stops generating and every getter reports as missing. -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- ==================== provided scope ====================
+             Needed to compile the shared web and persistence infrastructure
+             (BaseExceptionHandler, outbox, inbox). Provided so this stays a
+             library: a consumer that does not serve HTTP or use JPA is not
+             forced to pull in the stack, and every service already has it. -->
+
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-web</artifactId>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-tx</artifactId>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <scope>provided</scope>
-        </dependency>
-                <dependency>
-            <groupId>jakarta.servlet</groupId>
-            <artifactId>jakarta.servlet-api</artifactId>
-            <scope>provided</scope>
-        </dependency>
+
+        <!-- NoResourceFoundException, for the unmapped-path handler. -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-webmvc</artifactId>
             <scope>provided</scope>
         </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- MissingServletRequestParameterException extends ServletException. -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
             <scope>provided</scope>
         </dependency>
+
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
         </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
+
+        <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

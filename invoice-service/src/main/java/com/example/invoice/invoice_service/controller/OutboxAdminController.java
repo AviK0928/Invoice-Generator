@@ -1,7 +1,7 @@
 package com.example.invoice.invoice_service.controller;
 
-import com.example.invoice.invoice_service.repository.OutboxEventRepository;
-import com.example.invoice.invoice_service.service.OutboxDispatcher;
+import com.example.invoice.common.outbox.OutboxEventRepository;
+import com.example.invoice.common.outbox.OutboxDispatcher;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;

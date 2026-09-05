@@ -2,12 +2,12 @@ package com.example.invoice.export_service.service;
 
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import com.example.invoice.export_service.entity.ExportInvoice;
-import com.example.invoice.export_service.entity.ProcessedEvent;
 import com.example.invoice.export_service.mapper.ExportMapper;
 import com.example.invoice.export_service.repository.ExportCustomerRepository;
 import com.example.invoice.export_service.repository.ExportInvoiceItemRepository;
 import com.example.invoice.export_service.repository.ExportInvoiceRepository;
-import com.example.invoice.export_service.repository.ProcessedEventRepository;
+import com.example.invoice.common.inbox.ProcessedEvent;
+import com.example.invoice.common.inbox.ProcessedEventRepository;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

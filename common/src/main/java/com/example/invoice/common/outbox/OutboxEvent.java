@@ -1,4 +1,4 @@
-package com.example.invoice.invoice_service.entity;
+package com.example.invoice.common.outbox;
 
 import jakarta.persistence.*;
 import lombok.*;

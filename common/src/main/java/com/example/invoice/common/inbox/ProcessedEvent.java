@@ -1,4 +1,4 @@
-package com.example.invoice.export_service.entity;
+package com.example.invoice.common.inbox;
 
 import jakarta.persistence.*;
 import lombok.*;

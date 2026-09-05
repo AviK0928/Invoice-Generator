@@ -1,6 +1,6 @@
 package com.example.invoice.invoice_service.health;
 
-import com.example.invoice.invoice_service.repository.OutboxEventRepository;
+import com.example.invoice.common.outbox.OutboxEventRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.health.Health;
