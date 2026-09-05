@@ -1,13 +1,14 @@
 package com.example.invoice.customer_service.service;
 
 import com.example.invoice.common.enums.EventType;
+import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.CustomerEventDTO;
+import com.example.invoice.common.outbox.OutboxWriter;
 import com.example.invoice.customer_service.dto.CustomerRequestDTO;
 import com.example.invoice.customer_service.dto.CustomerResponseDTO;
 import com.example.invoice.customer_service.entity.Customer;
 import com.example.invoice.customer_service.exception.CustomerNotFoundException;
 import com.example.invoice.customer_service.exception.DuplicateEmailException;
-import com.example.invoice.customer_service.kafka.CustomerEventProducer;
 import com.example.invoice.customer_service.mapper.CustomerMapper;
 import com.example.invoice.customer_service.repository.CustomerRepository;
 import lombok.RequiredArgsConstructor;
@@ -20,8 +21,10 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class CustomerService {
 
+    private static final String AGGREGATE = "Customer";
+
     private final CustomerRepository customerRepository;
-    private final CustomerEventProducer eventProducer;
+    private final OutboxWriter outbox;
 
     // ---------------------------------------------------------------- queries
 
@@ -34,6 +37,10 @@ public class CustomerService {
 
     @Transactional(readOnly = true)
     public Page<CustomerResponseDTO> listCustomers(String search, Pageable pageable) {
+        // The wildcard is built here rather than in the query: binding the
+        // parameter three times inside LOWER() left Postgres unable to infer a
+        // type for the null case and it failed with "function lower(bytea)
+        // does not exist". A blank search also means "no filter", not "%%".
         String pattern = (search == null || search.isBlank())
                 ? null
                 : "%" + search.toLowerCase() + "%";
@@ -49,7 +56,7 @@ public class CustomerService {
         }
 
         Customer customer = customerRepository.save(CustomerMapper.toEntity(dto));
-        eventProducer.publish(toEvent(customer, EventType.CREATED));
+        record(customer, EventType.CREATED);
         return CustomerMapper.toDTO(customer);
     }
 
@@ -66,7 +73,7 @@ public class CustomerService {
         customer.setEmail(dto.getEmail());
         customer = customerRepository.save(customer);
 
-        eventProducer.publish(toEvent(customer, EventType.UPDATED));
+        record(customer, EventType.UPDATED);
         return CustomerMapper.toDTO(customer);
     }
 
@@ -75,11 +82,26 @@ public class CustomerService {
         Customer customer = customerRepository.findById(customerId)
                 .orElseThrow(() -> new CustomerNotFoundException(customerId));
 
+        // Recorded before the delete: the event is built from the entity's
+        // fields, and reading them after removal relies on the persistence
+        // context still holding them. Both commit in the same transaction, so
+        // ordering is otherwise irrelevant.
+        record(customer, EventType.DELETED);
         customerRepository.delete(customer);
-        eventProducer.publish(toEvent(customer, EventType.DELETED));
     }
 
     // -------------------------------------------------------------- internals
+
+    /**
+     * Recorded, not published. The customer row and the event describing it
+     * commit in one transaction, so a broker outage delays delivery instead of
+     * failing the write — this previously threw inside @Transactional and
+     * rolled the whole operation back.
+     */
+    private void record(Customer customer, EventType type) {
+        outbox.record(AGGREGATE, customer.getCustomerId(), Topics.CUSTOMER_EVENTS,
+                type.name(), toEvent(customer, type));
+    }
 
     private CustomerEventDTO toEvent(Customer customer, EventType type) {
         return CustomerEventDTO.builder()

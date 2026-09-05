@@ -2096,3 +2096,116 @@ extracting the base class.
 - **The idempotent create path records no event**, so a downstream service that
   missed the original still cannot recover by retrying the create.
 - **Topics are still auto-created.**
+
+---
+
+## Phase 3 (continued) — topic declarations and outbox rollout
+
+### Topic names were invisible constants in nine files
+
+Each producer and consumer held its own `private static final String TOPIC`.
+A mismatch between the two was undetectable: with `auto.create.topics.enable`
+on, a typo silently creates a new topic and the producer or consumer then talks
+to nothing.
+
+This bit during DLT testing — a mistyped `invoice-events.DLT` in a console
+command created an empty topic while real dead letters were going to
+`invoice-events-dlt`, and I read "topic is empty" as "the DLT never worked."
+
+Names now live in `common/kafka/Topics`, every topic is declared as a `NewTopic`
+bean by the service that owns it, and auto-create is off. A bad topic name now
+fails with `UNKNOWN_TOPIC_OR_PARTITION`.
+
+### What declaring them surfaced
+
+Two topics have only one end:
+
+- **`invoice-imported`** — import-service publishes, nothing consumes. The only
+  listener was `InvoiceImportedConsumer`, deleted in Phase 0 because every line
+  was commented out. So the import pipeline "re-enabled" in Phase 1 delivers
+  reliably into a void.
+- **`invoice-delete`** — invoice-service consumes, nothing publishes.
+  `InvoiceDeletionProducer` had no callers; its only one was the retention code
+  removed in ADR 002.
+
+Both need a decision: wire up or delete. Neither is broken exactly — they are
+half-finished features that looked complete because nothing checked.
+
+### Extracted the outbox into common
+
+Four services needed it. Copying 200 lines four times would be worse than
+sharing, so `OutboxEvent`, `OutboxEventRepository`, `OutboxWriter`,
+`OutboxDispatcher` and the `ProcessedEvent` inbox pair moved to
+`common.outbox` / `common.inbox`.
+
+**This reverses an earlier decision** not to share the inbox entity. The line I
+drew then — "shared entities couple schemas" — was the wrong line. Each service
+still runs its own migration creating its own table in its own database; only
+the Java is shared. What actually matters is that `OutboxEvent` is private
+plumbing no other service reads, whereas the event DTOs in `common` are a
+contract *between* services, where a change alters an agreement.
+
+### Three traps in the extraction
+
+**`@EntityScan` replaces the global default rather than adding to it.** Each
+service's application class must name its own package alongside the shared one.
+Omit it and every entity silently disappears — the error reads like an empty
+database.
+
+**`common` has no `spring-boot-starter-parent`, so no `-parameters` flag.**
+Spring Data could not bind named query parameters and the dispatcher failed on
+every poll with `For queries with named parameters you need to provide names for
+method parameters` — an error that reads like a query problem, not a build one.
+Fixed with `@Param` on every method *and* `maven.compiler.parameters`.
+
+Notably the `maven-compiler-plugin` `<compilerArgs>` block did **not** work;
+the `maven.compiler.parameters` property did. Verified at the bytecode level:
+
+```bash
+javap -p -v target/classes/.../OutboxEventRepository.class | grep MethodParameters
+```
+
+**`@EnableScheduling` is per application class.** The dispatcher is a `@Bean`
+from an imported `@Configuration`, which Spring still processes for `@Scheduled`
+— but only if the importing service enables scheduling. Without it, events queue
+forever with no error at all. Same silent failure as `ArchiveScheduler` in
+Phase 1.
+
+### The outbox introduced a deserialization trap
+
+The dispatcher publishes pre-serialised strings via `StringSerializer`, so there
+is **no `__TypeId__` header**. Consumers built as `new JsonDeserializer<>()`
+rely entirely on that header and break the moment their upstream switches.
+
+Fixed before switching any publisher, by giving every consumer an explicit
+target type and `setUseTypeHeaders(false)`. Doing it in the other order would
+have broken four cross-service flows simultaneously.
+
+### Rollout order mattered
+
+Stage A (consumers accept both header and no-header payloads), then B
+(extraction, behaviour unchanged), then C (publishers switched one at a time,
+each verified with a broker outage before starting the next).
+
+Every stage was independently verifiable and independently revertible. Doing
+extraction and switching together would have meant debugging "did the move break
+it or did the switch?" — which is the same reasoning as making the root POM an
+aggregator before a parent, back in Phase 0b.
+
+### Verified
+
+With Kafka stopped: a customer create and a CSV import both returned normal
+responses and queued their events. On restart, both published and the customer
+projected into invoice-service's local copy. Before Phase 3, the first call
+returned `500 "Send failed"` and saved nothing.
+
+### Still open
+
+- **Only export-service has an inbox.** archive-service and invoice-service's
+  consumers are not yet idempotent, which at-least-once delivery requires.
+- **The idempotent create path records no event**, so a downstream service that
+  missed the original still cannot recover by retrying the create.
+- **Four copies of `KafkaProducerConfig`** and three of
+  `errorHandler`/`dltKafkaTemplate`. Both belong in `common` now the pattern has
+  settled.
+- **`invoice-imported` and `invoice-delete`** each have one end.

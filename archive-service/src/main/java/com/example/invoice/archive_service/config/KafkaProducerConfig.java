@@ -1,20 +1,28 @@
 package com.example.invoice.archive_service.config;
 
-import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
-import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
-import org.springframework.kafka.support.serializer.JsonSerializer;
-import org.springframework.beans.factory.annotation.Value;
 
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * A single String producer, used only by the outbox dispatcher.
+ *
+ * The typed ArchiveEventDTO and InvoiceEventDTO templates are gone: nothing
+ * publishes directly any more. Events are serialised to JSON when recorded in
+ * the outbox and dispatched as pre-serialised strings.
+ *
+ * Not to be confused with dltKafkaTemplate in KafkaConsumerConfig, which is
+ * separate on purpose: it serialises by type, because a record that failed
+ * deserialization must be republished as raw bytes.
+ */
 @Configuration
 public class KafkaProducerConfig {
 
@@ -22,30 +30,31 @@ public class KafkaProducerConfig {
     private String bootstrapServers;
 
     @Bean
-    public ProducerFactory<String, ArchiveEventDTO> archiveEventProducerFactory() {
+    public ProducerFactory<String, String> producerFactory() {
         Map<String, Object> config = new HashMap<>();
         config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+
+        // acks=all with idempotence: the dispatcher marks a row published only
+        // after the broker confirms every in-sync replica has it. A weaker ack
+        // would let an event be marked delivered that a leader failure loses —
+        // quietly reintroducing the problem the outbox exists to solve.
+        config.put(ProducerConfig.ACKS_CONFIG, "all");
+        config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        // Fail fast rather than block. max.block.ms defaults to 60s, and the
+        // dispatcher retries on its next poll anyway. These sit below the
+        // dispatcher's own 5s send timeout.
+        config.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5000);
+        config.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 10000);
+        config.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 5000);
+
         return new DefaultKafkaProducerFactory<>(config);
     }
 
     @Bean
-    public KafkaTemplate<String, ArchiveEventDTO> archiveEventKafkaTemplate() {
-        return new KafkaTemplate<>(archiveEventProducerFactory());
-    }
-
-    @Bean
-    public ProducerFactory<String, InvoiceEventDTO> invoiceDeletionProducerFactory() {
-        Map<String, Object> config = new HashMap<>();
-        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
-        return new DefaultKafkaProducerFactory<>(config);
-    }
-
-    @Bean
-    public KafkaTemplate<String, InvoiceEventDTO> invoiceDeletionKafkaTemplate() {
-        return new KafkaTemplate<>(invoiceDeletionProducerFactory());
+    public KafkaTemplate<String, String> stringKafkaTemplate(ProducerFactory<String, String> pf) {
+        return new KafkaTemplate<>(pf);
     }
 }

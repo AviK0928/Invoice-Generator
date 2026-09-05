@@ -51,9 +51,9 @@ springdoc:
   show-actuator: false
   default-produces-media-type: application/json
 
-# The dispatcher polls for unpublished events. poll-interval is the best-case
-# delivery latency; max-attempts must exceed realistic outage duration, since
-# at 10 attempts events were being abandoned 20 seconds into a broker restart.
+# poll-interval is the best-case delivery latency. max-attempts must exceed
+# realistic outage duration — at 10 attempts events were abandoned 20 seconds
+# into a broker restart.
 outbox:
   poll-interval-ms: ${OUTBOX_POLL_MS:2000}
   batch-size: ${OUTBOX_BATCH_SIZE:100}
