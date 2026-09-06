@@ -13,35 +13,85 @@ shortcut.
 
 ### **[Open the API →](https://invoice-generator-e1z8.onrender.com/swagger-ui.html)**
 
-1. `POST /api/auth/login` with `admin` / `<password>`
-2. Copy the `accessToken`, click **Authorize**, paste it
-3. Every endpoint is usable from the page
+Every endpoint under `/api` requires a bearer token except the login itself. You
+get one by logging in with the demo account below — there is no signup, and the
+token is valid for 60 minutes.
 
-**The first request takes about two minutes.** The free instance sleeps after
-15 minutes idle and runs on 0.1 CPU, so a cold JVM start measures 94 seconds.
-That is the hosting tier, not the application — locally it starts in 11 seconds.
+**Demo account**
 
-`/actuator/health` is the only unauthenticated endpoint, which makes it the
-cheapest way to wake the instance before doing anything else.
+| Username | Password |
+|---|---|
+| `user` | `pO?MW4pr#n` |
 
-Prefer curl:
+### Using it from Swagger
+
+1. **Wake the instance first.** Open
+   [`/actuator/health`](https://invoice-generator-e1z8.onrender.com/actuator/health)
+   and wait for `{"status":"UP"}`. This takes **up to two minutes** on a cold
+   start — see below.
+2. Find **`POST /api/auth/login`** on the page and click **Try it out**.
+3. Replace the request body with:
+```json
+   {"username":"user","password":"pO?MW4pr#n"}
+```
+4. Click **Execute**. The response contains an `accessToken`.
+5. Copy the token value — **just the token, without `Bearer`**; Swagger adds that
+   itself.
+6. Click the **Authorize** button at the top right, paste it, then **Authorize**
+   and **Close**.
+7. Every endpoint on the page now works. `GET /api/customers` and
+   `GET /api/invoices` are the ones to start with; there is seeded data.
+
+Worth trying: `POST /api/invoices/{id}/pdf` returns 202 immediately and a request
+id, because generation happens in another module reacting to an event. Poll
+`GET /api/invoices/pdf-requests/{requestId}` until it reads `READY`, then
+download it from `GET /api/exports/pdf/{requestId}`. The download deletes the
+document — it exists only between generation and first retrieval.
+
+### Using it from the terminal
 
 ```bash
 APP=https://invoice-generator-e1z8.onrender.com
 
-curl -s $APP/actuator/health          # wakes it; UP when ready
+# Wakes the instance. Repeat until it answers UP.
+curl -s $APP/actuator/health
 
 TOKEN=$(curl -s -X POST $APP/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<password>"}' \
+  -d '{"username":"user","password":"<user-password>"}' \
   | sed 's/.*"accessToken":"\([^"]*\)".*/\1/')
 
 curl -s -H "Authorization: Bearer $TOKEN" "$APP/api/customers?page=0&size=10"
+curl -s -H "Authorization: Bearer $TOKEN" "$APP/api/invoices?page=0&size=10"
 ```
 
-Everything under `/api` except login requires a bearer token. There is no signup
-— users live in configuration as bcrypt hashes
-([ADR 001](docs/adr/001-gateway-owns-authentication.md)).
+### What to expect
+
+**The first request takes about two minutes.** The free instance sleeps after 15
+minutes idle and runs on 0.1 CPU, so a cold JVM start measures 94 seconds —
+locally the same artifact starts in 11. That is the hosting tier, not the
+application. Everything after the first request is fast.
+
+**Without a token you get 401**, including on paths that do not exist. That is
+`anyRequest().denyAll()` doing its job, not a broken deployment. The root `/`
+redirects to Swagger so the bare URL is not a dead end.
+
+**The database is public and writable.** The demo account can create and delete,
+so what you find there may not be what was seeded. Nothing sensitive is stored.
+
+**The demo account can do everything.** Roles are issued in the JWT and mapped to
+`ROLE_`-prefixed authorities, but no endpoint requires one yet — method-level
+authorization is a gap, listed among the omissions below rather than dressed up
+as a design.
+
+Fill in <user-password> in all four places — the table, the Swagger step, and the curl block. Use the one you verified returns 200 against $APP.
+
+The last paragraph is what makes publishing a single account honest: you say plainly that the role mechanism exists and isn't enforced, rather than letting a reviewer discover it and wonder what else is claimed but absent. It pairs with the Not included, deliberately bullet:
+
+markdown
+- **No method-level authorization.** Roles are issued in the token and mapped to
+  authorities; nothing consumes them. The `admin` and `user` accounts have
+  identical access. The mechanism is complete, the policy is not.
 
 ---
 
@@ -81,9 +131,9 @@ undownloaded documents expire.
 **RFC 9457 error contract.** Every error is `application/problem+json` with a
 stable `type` URI, verified by a `@WebMvcTest` slice.
 
-**76% instruction coverage** with a per-module JaCoCo gate on merged unit and
-integration data. Integration tests use Testcontainers Postgres and an embedded
-Kafka broker.
+**77% instruction coverage** (4,114 of 5,368) with a per-module JaCoCo gate on
+merged unit and integration data. Integration tests use Testcontainers Postgres
+and an embedded Kafka broker.
 
 ---
 
@@ -129,6 +179,25 @@ Build and test everything:
   point-in-time recovery is the database provider's job. The scheduler that used
   to do it exported to an ephemeral directory and then deleted the rows —
   [ADR 002](docs/adr/002-no-automated-retention.md).
+- **No method-level authorization.** The mechanism is complete and the policy is
+  missing. `AuthService` issues a `roles` claim, `SecurityConfig` wires a
+  `JwtGrantedAuthoritiesConverter` that maps it to `ROLE_`-prefixed authorities,
+  and `admin` and `user` genuinely carry different claims — the tokens differ in
+  length because of it. But no endpoint requires an authority: the filter chain
+  asks only for `authenticated()` on `/api/**`, and there is no
+  `@EnableMethodSecurity` or `@PreAuthorize` anywhere. A `USER` token returns 200
+  from `/api/invoices/admin/outbox/requeue` and can delete any invoice.
+
+  The gap is one change, not a redesign: `@EnableMethodSecurity` plus
+  `@PreAuthorize("hasRole('ADMIN')")` on the destructive and administrative
+  endpoints. The part that needs care is the error path — `@PreAuthorize` throws
+  `AccessDeniedException` from inside the method, so it lands in the same advice
+  chain that turned a `BadCredentialsException` into a 500 until it was handled
+  explicitly. Adding the annotations without an `AccessDeniedHandler` and a test
+  would produce a 500 where a 403 belongs.
+
+  Left undone rather than half-done. Authorization that returns the wrong status
+  is worse than none, because it looks enforced.  
 
 ---
 
