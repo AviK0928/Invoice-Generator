@@ -1,0 +1,47 @@
+# Render Blueprint. Deploys the consolidated artifact — see docs/adr/003.
+#
+# No `databases:` block on purpose. Render's free Postgres is deleted 30 days
+# after creation with a 14-day grace period, which is a dead portfolio link on a
+# timer. The database is a free tier elsewhere (Neon or Supabase), reached
+# through DB_URL. ADR 003 rejected Oracle on the same principle.
+services:
+  - type: web
+    name: invoice-generator
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # No build args: the Dockerfile defaults SERVICE=app.
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: cloud
+      # Overrides the Dockerfile's 70. One process now holds five modules'
+      # beans, Hibernate and Tomcat in 512 MB, and the margin matters more than
+      # the heap does. A judgement, not a measurement — revise once the
+      # deployed instance reports real usage.
+      - key: JAVA_TOOL_OPTIONS
+        value: -XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: SPRINGDOC_ENABLED
+        value: "true"
+      # sync: false means "set it in the dashboard, never in the repo".
+      # JWT_SECRET is not generateValue: HS256 needs at least 32 bytes and the
+      # app refuses to start below that, so it is generated deliberately with
+      # `openssl rand -hex 32` rather than left to a platform default of
+      # unspecified length.
+      - key: DB_URL
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASS
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: USER_PASSWORD_HASH
+        sync: false
