@@ -2658,3 +2658,64 @@ is a real diagnostic — the 42s was the only signal that anything was wrong.
    local-docker profile replaces it, so Failsafe runs uninstrumented and
    `jacoco-it.exec` is never written. Needs the property-name conflict
    resolved before any coverage gate or badge means anything.
+
+## Phase 4 (continued) — coverage
+
+JaCoCo in the parent's `<build><plugins>`, two prepare-agent executions and two
+reports, no gate yet. Coverage is now measured but nothing fails on it.
+
+### plugins vs pluginManagement, again
+
+Four consecutive failed attempts, all with the same symptom:
+Error: could not open `{surefireArgLine}'
+
+The JVM read `@` as its argument-file prefix and tried to open a file named
+`{surefireArgLine}`. Each attempt blamed something different — property name,
+lifecycle phase, execution ordering — and each was wrong.
+
+The cause was that JaCoCo sat in `<pluginManagement>` and so never executed.
+No execution, no property, and an unresolved `@{...}` passes through to the
+command line as literal text rather than failing. The prepare-agent docs say
+this outright: *"You can define empty property to avoid JVM startup error Could
+not find or load main class @{argLine} when using late property evaluation and
+jacoco-maven-plugin not executed."*
+
+Moving the declaration to `<plugins>` fixed it immediately. This is the same
+distinction that silently stopped Failsafe running earlier in the same session —
+management configures a plugin a module declares, it does not add one. Twice in
+one day, from opposite directions.
+
+Empty `<surefireArgLine/>` and `<failsafeArgLine/>` properties are declared as
+the documented safety net, so a future skip degrades to an empty argument
+rather than a JVM startup failure.
+
+### Two agents, two property names
+
+`prepare-agent` and `prepare-agent-integration` both write a property called
+`argLine` by default, so the second silently overwrites the first and Surefire
+ends up instrumenting into the integration data file. Distinct `propertyName`
+values are what make two agents in one module possible; the cost is that
+Surefire and Failsafe no longer pick anything up implicitly and both need
+explicit `@{...}` references.
+
+The `local-docker` profile needs the reference too. Its `<argLine>` replaces
+rather than merges, so without the `@{failsafeArgLine}` prefix Failsafe forks
+uninstrumented — integration coverage reads zero in the Codespace and correctly
+in CI, which is the worst kind of discrepancy.
+
+### What the numbers say
+
+`invoice-service`: **8%** from unit tests, **56%** from integration tests
+(571 of 1,019 instructions). `customer-service` unit: 8%, across only 348
+instructions since the module is mostly controller and advice.
+
+Wiring only the unit agent — the obvious first cut — would have reported this
+project at roughly 8% and been wrong by a factor of seven. Worth knowing before
+setting any threshold.
+
+### Remaining
+
+1. Tests for `api-gateway`, `export-service` and `archive-service`
+2. A `coverage` aggregate module (`report-aggregate`) for a single figure, then
+   a `check` gate set just below the real number, then the badge
+3. Why `@EmbeddedKafka` selects the ZooKeeper broker over KRaft
