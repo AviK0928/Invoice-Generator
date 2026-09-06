@@ -15,39 +15,46 @@ spring:
 
   cloud:
     gateway:
-      routes:
-        # /api/auth/** matches no route here, so it falls through to the
-        # gateway's own AuthController rather than being proxied anywhere.
-        #
-        # Each route also carries that service's /v3/api-docs, because the spec
-        # paths are prefixed with the same namespace. No separate doc routes.
-        - id: customer-service
-          uri: ${CUSTOMER_SERVICE_URI:http://localhost:8081}
-          predicates:
-            - Path=/api/customers/**
+      # spring.cloud.gateway.* moved under server.webflux in the
+      # spring-cloud-gateway-server-webflux artifact. The old keys still work
+      # via ServerWebfluxPropertiesMigrationListener, which logs every renamed
+      # key it had to translate on startup.
+      server:
+        webflux:
+          routes:
+            # /api/auth/** matches no route here, so it falls through to the
+            # gateway's own AuthController rather than being proxied anywhere.
+            #
+            # Each route also carries that service's /v3/api-docs, because the
+            # spec paths are prefixed with the same namespace. No separate doc
+            # routes.
+            - id: customer-service
+              uri: ${CUSTOMER_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/api/customers/**
 
-        - id: invoice-service
-          uri: ${INVOICE_SERVICE_URI:http://localhost:8082}
-          predicates:
-            - Path=/api/invoices/**
+            - id: invoice-service
+              uri: ${INVOICE_SERVICE_URI:http://localhost:8082}
+              predicates:
+                - Path=/api/invoices/**
 
-        - id: export-service
-          uri: ${EXPORT_SERVICE_URI:http://localhost:8083}
-          predicates:
-            - Path=/api/exports/**
+            - id: export-service
+              uri: ${EXPORT_SERVICE_URI:http://localhost:8083}
+              predicates:
+                - Path=/api/exports/**
 
-        - id: import-service
-          uri: ${IMPORT_SERVICE_URI:http://localhost:8084}
-          predicates:
-            - Path=/api/imports/**
+            - id: import-service
+              uri: ${IMPORT_SERVICE_URI:http://localhost:8084}
+              predicates:
+                - Path=/api/imports/**
 
-        - id: archive-service
-          uri: ${ARCHIVE_SERVICE_URI:http://localhost:8085}
-          predicates:
-            - Path=/api/archives/**
+            - id: archive-service
+              uri: ${ARCHIVE_SERVICE_URI:http://localhost:8085}
+              predicates:
+                - Path=/api/archives/**
 
-      default-filters:
-        - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_FIRST
+          default-filters:
+            - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_FIRST
 
 # HS256, symmetric: the gateway is both issuer and verifier, so there is no
 # third party needing a public key. Generate with: openssl rand -base64 48

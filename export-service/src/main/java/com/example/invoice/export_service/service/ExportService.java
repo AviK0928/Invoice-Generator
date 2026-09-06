@@ -1,12 +1,15 @@
 package com.example.invoice.export_service.service;
 
 import com.example.invoice.common.util.CsvUtil;
+import com.example.invoice.export_service.entity.ExportCustomer;
 import com.example.invoice.export_service.entity.ExportInvoice;
 import com.example.invoice.export_service.entity.ExportInvoiceItem;
 import com.example.invoice.export_service.exception.ExportTooLargeException;
 import com.example.invoice.export_service.repository.ExportInvoiceItemRepository;
 import com.example.invoice.export_service.repository.ExportInvoiceRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,6 +23,7 @@ import java.util.zip.ZipOutputStream;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ExportService {
 
     /**
@@ -78,12 +82,24 @@ public class ExportService {
 
         List<String[]> rows = new ArrayList<>();
         for (ExportInvoice invoice : invoices) {
+            // customer is a read-only join on customerId, and
+            // fk_export_invoices_customer means an invoice cannot be persisted
+            // without one — so this is unreachable while that constraint
+            // stands. Kept as a null-safe read rather than three chained
+            // dereferences: if the FK were ever relaxed, one inconsistent
+            // invoice would take the whole month's export down with an NPE.
+            ExportCustomer customer = invoice.getCustomer();
+            if (customer == null) {
+                log.warn("Invoice {} has no projected customer {}; exporting with blank customer fields",
+                        invoice.getInvoiceId(), invoice.getCustomerId());
+            }
+
             for (ExportInvoiceItem item : exportInvoiceItemRepository.findAllByInvoice(invoice)) {
                 rows.add(new String[] {
                         invoice.getInvoiceId().toString(),
-                        invoice.getCustomer().getCustomerId().toString(),
-                        invoice.getCustomer().getName(),
-                        invoice.getCustomer().getEmail(),
+                        invoice.getCustomerId().toString(),
+                        customer != null ? customer.getName() : null,
+                        customer != null ? customer.getEmail() : null,
                         invoice.getTotalAmount().toPlainString(),
                         invoice.getPaymentStatus().name(),
                         item.getDescription(),

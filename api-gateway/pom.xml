@@ -27,7 +27,7 @@
              ServerHttpSecurity is never created, so the gateway fails to start. -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-gateway</artifactId>
+            <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
         </dependency>
 
         <!-- Issues and validates HS256 JWTs. Brings spring-security-oauth2-jose,

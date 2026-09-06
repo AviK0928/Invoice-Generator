@@ -8,6 +8,12 @@ FROM maven:3.9-eclipse-temurin-21 AS build
 ARG SERVICE
 WORKDIR /build
 
+# Every module's POM, listed individually: Maven assembles the reactor from the
+# root <modules> before -am narrows it, so a module listed there but missing
+# here fails the build at "Scanning for projects". Adding a module means adding
+# a line — COPY */pom.xml would be tidier but Docker flattens the paths, and
+# COPY . . costs the dependency layer cache that makes six parallel image
+# builds tolerable.
 # POMs first, so the dependency layer caches independently of source edits.
 COPY pom.xml .
 COPY common/pom.xml            common/

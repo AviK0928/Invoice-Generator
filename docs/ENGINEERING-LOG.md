@@ -2994,3 +2994,80 @@ so every module inherits it. Modules were not opting in by declaring the plugin
 — those declarations were redundant. What made a module effectively un-gated
 was having no merged exec file, which made `check` skip. `common` had none
 until it had tests.
+
+## customer-service integration tests
+
+The only publishing service with no test of its publishing. It is the origin of
+customer-events, which both invoice-service and export-service project into
+local read models — so a silent break here would have surfaced two services
+downstream as stale customer data, with nothing pointing back here.
+
+Seven tests. Create, update and delete each record an event in the same
+transaction as the row. A duplicate email is rejected in application code
+before anything is written, which is what makes it a 409 rather than a 500 from
+the unique constraint. An update may keep its own email but not take another's
+— `existsByEmailAndCustomerIdNot`, not `existsByEmail`. And a blank or null
+search widens rather than matching nothing, exercising the query whose type
+inference previously failed with `function lower(bytea) does not exist`.
+
+The `coverage.minimum` override of 0.05 is gone. customer-service now clears
+the same 0.55 floor as every other module.
+
+Its `application.yml` also carries `outbox.max-attempts: 300` against 10
+everywhere else, with a comment saying 10 abandoned events 20 seconds into a
+broker restart. If that reasoning holds it holds for every service. Recorded as
+an inconsistency, not resolved.
+
+## A second bug that wasn't there
+
+`ExportService.buildCsv` chained three dereferences through
+`invoice.getCustomer()` with no null check, flagged early on as a latent 500. A
+test was written to prove it: an invoice referencing a customer id that was
+never projected.
+
+It failed on `fk_export_invoices_customer`. There is a foreign key from
+`export_invoices.customer_id` to `export_customers`, so an invoice cannot be
+persisted without a projected customer and the null was never reachable. The
+test asserted a state the database forbids, and was deleted.
+
+The guard stayed, with its comment rewritten from "this happens" to "this
+cannot happen and here is what enforces it". Three lines against a failure that
+would take a whole month's export down rather than one row.
+
+**Twice now** a test written to demonstrate a suspected bug has failed because
+a constraint already prevented it — this and archive-service's redelivery. Both
+times the suspicion came from reading the service and not the migration. The
+schema is part of the code.
+
+Incidentally, this is also why `InvoiceEventHandlerService` saves the customer
+before the invoice. That ordering is load-bearing, not stylistic.
+
+## Gateway starter migration
+
+`spring-cloud-starter-gateway` → `spring-cloud-starter-gateway-server-webflux`,
+and every `spring.cloud.gateway.*` key moved under
+`spring.cloud.gateway.server.webflux.*`.
+
+The old keys kept working the whole time via
+`ServerWebfluxPropertiesMigrationListener`, which logs each renamed key it
+translates. That listener going silent is the verification — a partial move
+leaves it naming exactly which keys were missed, which is a better check than
+reading the file.
+
+The move also surfaced a duplicate `archive-service` route. Gateway registers
+both and the first match wins, so it had been a silent no-op.
+
+## Dockerfile module COPYs: kept, not fixed
+
+Each module's POM is copied by name, so adding a module breaks all six image
+builds until a line is added — as `coverage` did. Left as is with a comment
+explaining why: `COPY */pom.xml ./` flattens paths in Docker, and `COPY . .`
+with a `.dockerignore` costs the dependency layer cache that makes six parallel
+builds tolerable. The failure is loud and immediate, which is the cheapest kind
+to live with.
+
+## Coverage
+
+76%, 3,841 of 5,034 instructions. The arc across the project:
+8% (unit tests only) → 34% (integration data included) → 42% (api-gateway) →
+65% (export and archive) → 70% (async PDF) → 76% (customer-service).
