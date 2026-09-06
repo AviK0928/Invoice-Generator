@@ -148,5 +148,26 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- JwtEncoder and the claims builder. Brings spring-security-core and
+             spring-security-crypto transitively, which is where
+             BadCredentialsException and BCryptPasswordEncoder come from.
+             provided, like everything else here: the consumer supplies the
+             runtime. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- @Tag and @Operation on AuthController. The starter-common artifact
+             rather than swagger-annotations directly, so the version comes from
+             the same property as the two UI starters. -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-common</artifactId>
+            <version>${springdoc.version}</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>

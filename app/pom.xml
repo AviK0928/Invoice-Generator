@@ -57,6 +57,17 @@
             <artifactId>archive-service</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+        <!-- Neither reaches app transitively: the five services have no
+             security at all. Authentication lived at the gateway (ADR 001), and
+             in one process this is where it lands. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
         <!--
           Lombok is optional in every service POM and optional dependencies do
           not transit — deliberately, since it is a compile-time processor no

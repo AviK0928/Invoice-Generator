@@ -22,6 +22,11 @@
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>com.example.invoice</groupId>
+            <artifactId>common</artifactId>
+            <version>1.5.0</version>
+        </dependency>
         <!-- Reactive. spring-boot-starter-web must NOT be added: with Spring MVC
              on the classpath, servlet security auto-config wins and
              ServerHttpSecurity is never created, so the gateway fails to start. -->

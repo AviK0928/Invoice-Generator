@@ -3210,3 +3210,52 @@ made it expensive. `unzip -l` on the jar settled it in one command and should
 have been the first move rather than the third. The rule worth keeping: when a
 container behaves like an older version of the code, check the artifact before
 theorising about the framework.
+
+## Authentication in the consolidated artifact
+
+The gateway is WebFlux and cannot be in the process — its own POM records that
+Spring MVC on the classpath takes its security auto-configuration down. So the
+consolidated artifact needed a servlet security chain, and the question was
+whether to duplicate the credential logic or move it.
+
+Moved. `AuthController`, `AuthService`, `AuthProperties`, `LoginRequest` and
+`TokenResponse` are all blocking and touch neither stack, so they went to
+`common.auth` unchanged — the only edit was the package line, and the imports
+between them disappeared because three packages became one. What stayed at the
+gateway is the genuinely reactive part: `ServerHttpSecurity` and
+`ReactiveJwtDecoder`. The app has the servlet equivalents, `HttpSecurity` and
+`JwtDecoder`, over the same rules.
+
+The alternative was ~60 duplicated lines including the `DUMMY_HASH` timing
+defence, which is precisely the kind of thing that gets fixed in one copy.
+
+### One rule the reactive version did not need
+
+`/error` is permitted in the servlet chain. Spring Security filters the ERROR
+dispatch by default, so `anyRequest().denyAll()` turns every unhandled exception
+into a 403 and hides what actually failed. The gateway has no error forward, so
+its `anyExchange().denyAll()` had nothing to correspond to.
+
+### Coverage after the move
+
+`api-gateway` is down to three classes — `JwtConfig`, `SecurityConfig`,
+`ApiGatewayApplication` — with `AuthContractTest` still in place, and it clears
+the 0.55 gate unchanged. Both config classes execute during context startup, so
+a single `@SpringBootTest` covers them. That was a hope, not a prediction, and
+the risk was real enough to be worth checking before the move rather than after.
+`common` went from 12 classes to 19.
+
+`AuthContractTest` needed no edit at all: it drives the endpoint over
+`WebTestClient` and names `AuthService` only in comments.
+
+### A verification command that lied
+
+The smoke test read `401, 401, 401` and looked like a broken filter chain. The
+token extraction was wrong — the response record is
+`TokenResponse(String accessToken, ...)`, so the JSON key is `accessToken` and a
+`sed` looking for `"token":` returned the whole body, which then went out as
+`Authorization: Bearer {"accessToken":"eyJ..."}`. Correctly rejected.
+
+Two of those three 401s were real assertions passing and one was the harness
+failing, and they were indistinguishable. Echoing the extracted value before
+using it costs one line and separates them.

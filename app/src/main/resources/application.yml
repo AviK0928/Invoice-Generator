@@ -96,6 +96,24 @@ springdoc:
     show-actuator: false
     default-produces-media-type: application/json
 
+# HS256, symmetric: this process is both issuer and verifier, so there is no
+# third party needing a public key. Generate with: openssl rand -hex 32
+jwt:
+    secret: ${JWT_SECRET:local-development-only-secret-at-least-32-bytes-long-change-me}
+
+# No user service, no signup. Users are configuration; passwords are bcrypt
+# hashes and plaintext never appears here. Regenerate a hash with:
+#   docker run --rm httpd:alpine htpasswd -bnBC 10 "" yourpassword | tr -d ':\n'
+auth:
+    token-ttl-minutes: ${JWT_TTL_MINUTES:60}
+    users:
+        admin:
+            password-hash: ${ADMIN_PASSWORD_HASH}
+            roles: [ADMIN, USER]
+        user:
+            password-hash: ${USER_PASSWORD_HASH}
+            roles: [USER]
+
 management:
     endpoints:
         web:
@@ -113,6 +131,7 @@ logging:
         com.example.invoice: ${LOG_LEVEL:INFO}
 
 ---
+---
 spring:
     config:
         activate:
@@ -122,3 +141,7 @@ springdoc:
         enabled: ${SPRINGDOC_ENABLED:false}
     swagger-ui:
         enabled: ${SPRINGDOC_ENABLED:false}
+# No default in the cloud profile: fail to start rather than run on a key that
+# is committed to the repository.
+jwt:
+    secret: ${JWT_SECRET}

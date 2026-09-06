@@ -1,8 +1,5 @@
-package com.example.invoice.api_gateway.service;
+package com.example.invoice.common.auth;
 
-import com.example.invoice.api_gateway.config.AuthProperties;
-import com.example.invoice.api_gateway.dto.LoginRequest;
-import com.example.invoice.api_gateway.dto.TokenResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.BadCredentialsException;

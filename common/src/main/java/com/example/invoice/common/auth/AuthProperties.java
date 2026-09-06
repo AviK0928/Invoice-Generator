@@ -1,4 +1,4 @@
-package com.example.invoice.api_gateway.config;
+package com.example.invoice.common.auth;
 
 import lombok.Getter;
 import lombok.Setter;

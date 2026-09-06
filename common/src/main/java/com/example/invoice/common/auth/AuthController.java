@@ -1,8 +1,5 @@
-package com.example.invoice.api_gateway.controller;
+package com.example.invoice.common.auth;
 
-import com.example.invoice.api_gateway.dto.LoginRequest;
-import com.example.invoice.api_gateway.dto.TokenResponse;
-import com.example.invoice.api_gateway.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;

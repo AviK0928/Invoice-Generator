@@ -1,4 +1,4 @@
-package com.example.invoice.api_gateway.dto;
+package com.example.invoice.common.auth;
 
 import jakarta.validation.constraints.NotBlank;
 
