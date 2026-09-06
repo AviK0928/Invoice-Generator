@@ -28,6 +28,7 @@
         <module>export-service</module>
         <module>import-service</module>
         <module>archive-service</module>
+        <module>app</module>
         <module>coverage</module>
     </modules>
 

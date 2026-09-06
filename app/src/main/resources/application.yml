@@ -1,0 +1,124 @@
+server:
+    port: ${PORT:8080}
+    error:
+        include-stacktrace: never
+        include-message: always
+        include-binding-errors: never
+        include-exception: false
+
+spring:
+    application:
+        # Prefixes outbox event ids, and therefore the processed_events keys. One
+        # name for one process — events no longer say which module produced them,
+        # which is accurate: there is one dispatcher.
+        name: invoice-generator
+
+    datasource:
+        url: ${DB_URL:jdbc:postgresql://localhost:5432/invoicedb}
+        username: ${DB_USER:invoice}
+        password: ${DB_PASS:invoice}
+        driver-class-name: org.postgresql.Driver
+        hikari:
+            # One pool for what used to be five. Kept small deliberately: a free-tier
+            # Postgres caps connections well below what five services' worth of
+            # default pools would open.
+            maximum-pool-size: ${DB_POOL_SIZE:10}
+            connection-timeout: 20000
+
+    flyway:
+        enabled: true
+        baseline-on-migrate: false
+        validate-on-migrate: true
+        # Not the default. Every service jar carries db/migration/V1__baseline.sql,
+        # so the default location merges five files claiming version 1 off the
+        # classpath and Flyway refuses to start. This module's set lives one level
+        # down and is the only thing that runs here.
+        locations: classpath:db/migration/app
+
+    jpa:
+        hibernate:
+            ddl-auto: ${DDL_AUTO:validate}
+        show-sql: false
+        open-in-view: false
+        properties:
+            hibernate:
+                format_sql: false
+                jdbc:
+                    lob:
+                        non_contextual_creation: true
+
+    servlet:
+        multipart:
+            enabled: true
+            max-file-size: ${MAX_UPLOAD_SIZE:5MB}
+            max-request-size: ${MAX_UPLOAD_SIZE:5MB}
+            file-size-threshold: 1MB
+
+outbox:
+    # The reason this module exists. Selects InProcessOutboxEventPublisher and
+    # leaves the Kafka one unbuilt — see OutboxConfiguration.
+    transport: in-process
+    poll-interval-ms: ${OUTBOX_POLL_MS:2000}
+    batch-size: ${OUTBOX_BATCH_SIZE:100}
+    # 10, not the 300 invoice-service and customer-service carry. That number was
+    # chosen so retries outlast a broker restart. There is no broker here: a
+    # failure is a handler throwing, which will throw again. 300 attempts of a
+    # deterministic failure is 300 log lines and no recovery.
+    max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
+    cleanup-cron: ${OUTBOX_CLEANUP_CRON:0 0 3 * * *}
+
+invoice:
+    auto-archive-after-months: ${AUTO_ARCHIVE_MONTHS:6}
+    auto-archive-cron: ${AUTO_ARCHIVE_CRON:0 0 2 * * *}
+
+pdf:
+    request-timeout-minutes: ${PDF_REQUEST_TIMEOUT_MINUTES:15}
+    sweep-cron: ${PDF_SWEEP_CRON:0 */5 * * * *}
+    retention-hours: ${PDF_RETENTION_HOURS:24}
+    cleanup-cron: ${PDF_CLEANUP_CRON:0 30 3 * * *}
+
+export:
+    max-invoices: ${EXPORT_MAX_INVOICES:500}
+
+import:
+    max-rows: ${IMPORT_MAX_ROWS:10000}
+
+springdoc:
+    api-docs:
+        enabled: ${SPRINGDOC_ENABLED:true}
+        path: /v3/api-docs
+    swagger-ui:
+        enabled: ${SPRINGDOC_ENABLED:true}
+        path: /swagger-ui.html
+        operations-sorter: method
+        tags-sorter: alpha
+        doc-expansion: none
+    show-actuator: false
+    default-produces-media-type: application/json
+
+management:
+    endpoints:
+        web:
+            exposure:
+                include: health,info
+    endpoint:
+        health:
+            show-details: never
+            probes:
+                enabled: true
+
+logging:
+    level:
+        root: INFO
+        com.example.invoice: ${LOG_LEVEL:INFO}
+
+---
+spring:
+    config:
+        activate:
+            on-profile: cloud
+springdoc:
+    api-docs:
+        enabled: ${SPRINGDOC_ENABLED:false}
+    swagger-ui:
+        enabled: ${SPRINGDOC_ENABLED:false}

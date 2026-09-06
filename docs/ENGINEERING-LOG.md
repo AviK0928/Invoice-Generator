@@ -3132,3 +3132,81 @@ Sequencing note: the deployment plan had the assembly skeleton first and this
 second. Wrong way round — the skeleton cannot start without the seam. Found by
 reading `OutboxConfiguration`'s bean signature rather than by a failing build,
 which is the cheaper of the two.
+
+## The consolidated artifact starts
+
+`app` is an assembly module: five service jars as dependencies, one datasource,
+one schema, and an in-process publisher where the broker used to be. It starts
+in 11 seconds, applies six migrations, and moves a customer event and an invoice
+event end to end with no Kafka on the wire.
+
+The proof is indirect and better for it. Creating an invoice requires the
+customer to exist in `local_customers`, which only `CustomerEventConsumer`
+populates. A 201 on the invoice POST therefore means outbox row → dispatcher →
+in-process publisher → the real consumer, all of it. Both outbox rows read
+published with zero attempts.
+
+### Four things that had to be got right
+
+**Lombok is optional and optional does not transit.** `app` is the first module
+to depend on another module's classes rather than merely build beside it, and
+Lombok — declared optional in every service POM precisely so consumers do not
+inherit a compile-time processor — did not come with them. Five compile errors,
+one missing dependency. The same shape will recur with anything `provided` in
+`common`.
+
+**Flyway's default location merges the classpath.** Every service jar ships
+`db/migration/V1__baseline.sql`. Left at the default, Flyway finds five files
+claiming version 1 and refuses to start. The app's set lives under
+`db/migration/app` with `spring.flyway.locations` set explicitly.
+
+**Component scanning six modules together needs a bean name generator.** Four
+class simple names repeat across the services — `GlobalExceptionHandler` in all
+five, plus `OpenApiConfig`, `KafkaTopicConfig`, `KafkaConsumerConfig` — and the
+default generator derives bean names from simple names, so scanning them
+together is a `ConflictingBeanDefinitionException`.
+`FullyQualifiedAnnotationBeanNameGenerator` sidesteps it without renaming
+eighteen classes across five modules. `@Bean` method names are unaffected, so
+`containerFactory = "..."` references still resolve.
+
+**Excluding `KafkaAutoConfiguration` makes `@KafkaListener` inert**, which is
+what lets the consumer classes be reused rather than reimplemented. Without the
+annotation post-processor they are ordinary beans, so the in-process publisher
+calls `consume(...)` directly and the event-type filters in
+`ArchiveEventConsumer`, `InvoiceDeletionConsumer` and `UnarchiveConsumer` stay in
+one place.
+
+### Decisions recorded, not observed
+
+Handlers run in `REQUIRES_NEW`. `dispatch()` is `@Transactional` and catches per
+event so one bad message cannot stall a batch; an inline handler would join that
+transaction, and its failure would mark it rollback-only, be swallowed by the
+catch, and then take the whole batch down at `saveAll` with
+`UnexpectedRollbackException`. Not seen — reasoned about before writing it, and
+noted here so the propagation is not "tidied" later.
+
+`processed_events` is now one table for what used to be three, keyed by the
+publishing service's event id. Two consumers of one topic would see each other's
+rows and the second would skip. No topic has two consumers, and the publisher's
+switch routes each to exactly one — so it holds, but by assumption in two places
+now rather than by construction.
+
+`outbox.max-attempts` is 10 here, not the 300 invoice-service and
+customer-service carry. That number was chosen to outlast a broker restart;
+there is no broker, and 300 attempts at a deterministic handler failure is 300
+log lines and no recovery.
+
+### The hour lost to a stale image
+
+The app started with `spring.application.name: customer-service` on port 8081 —
+a service's yml, not its own. Six jars ship `application.yml` at the classpath
+root, so "the wrong one won" was a plausible diagnosis, and it was wrong. The
+image had simply not been rebuilt: the sequence was `mvn package` then
+`docker run`, and `docker build` does not follow from either. The jar in the
+image predated the yml existing.
+
+Both hypotheses were about config resolution and both were wrong, which is what
+made it expensive. `unzip -l` on the jar settled it in one command and should
+have been the first move rather than the third. The rule worth keeping: when a
+container behaves like an older version of the code, check the artifact before
+theorising about the framework.

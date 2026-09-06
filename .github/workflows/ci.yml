@@ -71,6 +71,7 @@ jobs:
           - export-service
           - import-service
           - archive-service
+          - app
     steps:
       - uses: actions/checkout@v5
 

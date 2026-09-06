@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.example.invoice</groupId>
+        <artifactId>invoice-generator</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>app</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>app</name>
+    <description>Consolidated single-artifact deployment — see docs/adr/003</description>
+
+    <!--
+      An assembly, not a service. It owns no domain code: the five services are
+      dependencies, and this module supplies only what one process needs that
+      five processes did not — one datasource, one schema, one security filter
+      chain, and an in-process replacement for the broker.
+
+      Depending on them at all is what the exec classifier bought. Without it
+      these are executable jars with nested BOOT-INF and useless as libraries.
+
+      api-gateway is deliberately absent. It is WebFlux, and its own POM records
+      why that is not negotiable: with Spring MVC on the classpath, servlet
+      security auto-configuration wins and ServerHttpSecurity is never created.
+      Routing is meaningless in one process anyway; authentication is not, and
+      is reimplemented here on the servlet stack.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>com.example.invoice</groupId>
+            <artifactId>customer-service</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.example.invoice</groupId>
+            <artifactId>invoice-service</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.example.invoice</groupId>
+            <artifactId>export-service</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.example.invoice</groupId>
+            <artifactId>import-service</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.example.invoice</groupId>
+            <artifactId>archive-service</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <!--
+          Lombok is optional in every service POM and optional dependencies do
+          not transit — deliberately, since it is a compile-time processor no
+          consumer should inherit. Any module writing its own Lombok-annotated
+          code declares it, the same way each service does. Version comes from
+          the Boot parent; the repackage exclusion comes from ours.
+        -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Declared, not configured: opts this module into repackaging.
+                 The exec classifier and the Lombok exclusion come from the
+                 parent, so this produces app-exec.jar like every service. -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+
+            <!-- No jacoco plugin yet. Declaring it would opt this module into
+                 the 0.55 gate with no tests written, failing the build for a
+                 reason unrelated to the change. It goes in with the first
+                 integration test, along with the coverage/pom.xml dependency
+                 whose absence would otherwise leave this module silently out
+                 of the aggregate figure. -->
+        </plugins>
+    </build>
+</project>
