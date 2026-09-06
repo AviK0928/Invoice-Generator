@@ -2725,3 +2725,88 @@ setting any threshold.
    skipped check passes. Needs pointing at the aggregate data before it means
    anything. The aggregate report itself works: 34%, 1,575 of 4,501
    instructions, all seven bundles.
+## Phase 4 (continued) — api-gateway security contract
+
+Nine WebTestClient tests against a real Netty port. `MockMvc` is not an option:
+the gateway is WebFlux, and `spring-boot-starter-web` must stay off the
+classpath or servlet security auto-config wins and `ServerHttpSecurity` is
+never created.
+
+Every test either terminates at the gateway (`/api/auth/login`,
+`/actuator/health`) or is rejected by the security filter before routing. That
+is not a limitation — the filter chain in front of the routes is the thing
+under test, and an authenticated request to `/api/customers/**` would try to
+reach `localhost:8081` and fail.
+
+`application.yml` declares `${ADMIN_PASSWORD_HASH}` and
+`${USER_PASSWORD_HASH}` with no defaults, so the context will not start without
+them. The test profile supplies bcrypt hashes directly. Quoted, because `$` is
+a placeholder prefix in Spring config and an unquoted `$2b$10$...` risks being
+read as one.
+
+All three assertions I expected to need loosening — 400 on blank credentials,
+403 rather than 401 for an authenticated caller outside `/api`, and rejection
+of a foreign-signed token — passed as written. The contract was already what it
+looked like.
+
+### The timing defence was not defending
+
+`AuthService.DUMMY_HASH` existed so that an unknown username still costs a full
+bcrypt round, closing the gap that would otherwise let an attacker enumerate
+valid usernames by timing. The constant was not a valid bcrypt hash.
+`BCryptPasswordEncoder` rejected it on shape and returned false without
+hashing:WARN o.s.s.c.bcrypt.BCryptPasswordEncoder : Encoded password does not look like BCrypt
+
+
+So an unknown user returned in microseconds while a wrong password took tens of
+milliseconds — precisely the signal the constant was written to suppress. The
+javadoc described a defence the code did not implement.
+
+Replaced with a real cost-10 hash, generated and round-trip verified before
+use. The javadoc now says the value's validity is the whole point and names the
+warning to grep for if it is ever regenerated.
+
+**What is worth recording is how it surfaced.** No test failed. The suite
+asserts that the two failure responses are byte-identical, which they were —
+timing is invisible to an HTTP assertion. The only evidence was one WARN line
+in a passing build's output. A test was added afterwards comparing the two
+durations, but it is deliberately loose: it catches "no work at all", not a
+timing side channel, which cannot be measured reliably over a socket.
+
+Second time today that reading a green build's log found something the
+assertions could not. The first was the 300ms gap that exposed
+`operation-timeout: 5` as five milliseconds.
+
+### Coverage
+
+api-gateway: 0% to 96%, 316 of 328 instructions. Small module, nine tests
+driving it through a real port. It joins the gate at the inherited 0.50 rather
+than a bespoke threshold.
+
+Aggregate: 34% to 42%.
+
+Also confirmed, since it was an open question when the gate was built:
+`jacoco:merge` writes a merged file even from a single input. `api-gateway` and
+`customer-service` have Surefire tests only, and both produced
+`jacoco-merged.exec` from `jacoco.exec` alone — so `check` reads real data in
+all four gated modules rather than skipping, which is how a gate goes quietly
+inert.
+
+### Known state, not chased
+
+`spring-cloud-starter-gateway` is deprecated in favour of
+`spring-cloud-starter-gateway-server-webflux`, and every
+`spring.cloud.gateway.routes.*` key is renamed under
+`spring.cloud.gateway.server.webflux.*`. Currently auto-mapped with a
+migration warning on every startup. Works, but it is an upgrade blocker sitting
+in the most security-relevant module.
+
+### Remaining
+
+1. Tests for `export-service` and `archive-service`
+2. The gateway starter and route-key migration above
+3. Why `@EmbeddedKafka` selects the ZooKeeper broker over KRaft
+4. The Dockerfile lists every module's POM by hand, so adding a module breaks
+   all six image builds until it is copied too — as `coverage` did. A
+   `.dockerignore` plus `COPY . .` would fix it at the cost of layer caching
+5. Render deployment

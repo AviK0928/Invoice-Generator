@@ -25,12 +25,23 @@ public class AuthService {
     private static final String ISSUER = "invoice-generator";
 
     /**
-     * A syntactically valid bcrypt hash that no password matches. Used when the
-     * username is unknown so that verification still costs a full bcrypt round
-     * — returning early would make a missing user measurably faster than a
-     * wrong password, which lets an attacker enumerate valid usernames.
+     * A real bcrypt hash, verified against the encoder. Used when the username
+     * is unknown so that verification still costs a full bcrypt round —
+     * returning early would make a missing user measurably faster than a wrong
+     * password, which lets an attacker enumerate valid usernames.
+     *
+     * Its validity is the whole point and is easy to lose. The previous value
+     * looked like a hash but was not one: BCryptPasswordEncoder rejected it on
+     * shape, logged "Encoded password does not look like BCrypt", and returned
+     * false without hashing anything. An unknown user came back in
+     * microseconds against tens of milliseconds for a wrong password — the
+     * exact gap this constant exists to close. Nothing failed; only the log
+     * showed it.
+     *
+     * Which password it corresponds to does not matter. That it is well-formed
+     * does. If this is ever regenerated, check the log for that warning.
      */
-    private static final String DUMMY_HASH = "$2a$10$7EqJtq98hPqEX7fNZaFWoOa8Ea8Ea8Ea8Ea8Ea8Ea8Ea8Ea8Ea8E";
+    private static final String DUMMY_HASH = "$2b$10$gEVIhuWm4QhkKTQmrTrrFOrhJraFkmp/LVHv0hbCGVSkDH4oJyCbm";
 
     private final AuthProperties authProperties;
     private final PasswordEncoder passwordEncoder;

@@ -98,6 +98,13 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
+            <!-- Gated at the inherited coverage.minimum. No merge input here:
+                the tests are all Surefire, so check reads jacoco.exec and the
+                merge execution finds nothing to combine. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
 		</plugins>
 	</build>
 </project>
