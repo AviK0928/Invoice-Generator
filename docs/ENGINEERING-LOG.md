@@ -2653,3 +2653,8 @@ is a real diagnostic — the 42s was the only signal that anything was wrong.
 2. JaCoCo with a coverage gate and badge, now a single declaration in the
    parent rather than seven copies
 3. Why `@EmbeddedKafka` selects the ZooKeeper broker over KRaft
+
+4. Integration coverage: both JaCoCo prepare goals write `argLine` and the
+   local-docker profile replaces it, so Failsafe runs uninstrumented and
+   `jacoco-it.exec` is never written. Needs the property-name conflict
+   resolved before any coverage gate or badge means anything.

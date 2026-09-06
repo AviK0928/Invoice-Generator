@@ -49,21 +49,22 @@
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <springdoc.version>2.8.13</springdoc.version>
+        <jacoco.version>0.8.12</jacoco.version>
     </properties>
 
     <build>
-        <!--
-          Inherited by every module, so integration tests run everywhere
-          without each POM declaring this.
-
-          In <plugins>, not <pluginManagement>: pluginManagement configures a
-          plugin a module already declares, it does not add one. This block
-          spent one run in pluginManagement with the module declarations
-          already deleted — nine integration tests silently stopped running
-          and the build still reported SUCCESS. Modules with no *IT classes
-          print "No tests to run" and cost nothing.
-        -->
         <plugins>
+            <!--
+              Inherited by every module, so integration tests run everywhere
+              without each POM declaring this.
+
+              In <plugins>, not <pluginManagement>: pluginManagement configures
+              a plugin a module already declares, it does not add one. This
+              block spent one run in pluginManagement with the module
+              declarations already deleted — nine integration tests silently
+              stopped running and the build still reported SUCCESS. Modules
+              with no *IT classes print "No tests to run" and cost nothing.
+            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
@@ -72,6 +73,55 @@
                         <goals>
                             <goal>integration-test</goal>
                             <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+              Coverage, in <plugins> for the same reason as Failsafe: the
+              agent goals have to actually run in every module.
+
+              Two prepare executions because Surefire and Failsafe fork
+              separate JVMs and write separate .exec files. Wiring only the
+              unit one would drop every integration test from the number, and
+              those cover the services, the importer and the outbox.
+
+              Both prepare goals write a property that Surefire and Failsafe
+              read as their argLine. Nothing here references those properties
+              explicitly yet — see the note in the local-docker profile.
+            -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-unit</id>
+                        <phase>initialize</phase>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>prepare-integration</id>
+                        <phase>pre-integration-test</phase>
+                        <goals>
+                            <goal>prepare-agent-integration</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report-unit</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report-integration</id>
+                        <phase>post-integration-test</phase>
+                        <goals>
+                            <goal>report-integration</goal>
                         </goals>
                     </execution>
                 </executions>
@@ -110,8 +160,12 @@
           is unset, so it never applies on a GitHub Actions runner where the
           daemon is plain and these settings are at best redundant.
 
-          The configuration merges onto the Failsafe declaration in the main
-          build above; it does not add a second one.
+          This <argLine> replaces rather than appends, so it currently drops
+          JaCoCo's integration agent — integration coverage will read low in the
+          Codespace and correctly in CI. Left as-is deliberately: four attempts
+          at @{...} late evaluation all ended with the placeholder reaching the
+          JVM literally ("could not open `{surefireArgLine}'"), so that is being
+          settled separately rather than while the build is red.
         -->
         <profile>
             <id>local-docker</id>
