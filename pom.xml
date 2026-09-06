@@ -61,6 +61,8 @@
         -->
         <surefireArgLine/>
         <failsafeArgLine/>
+        <!-- Floor per module, not a target. Raise as coverage climbs. -->
+        <coverage.minimum>0.50</coverage.minimum>
     </properties>
 
     <build>
@@ -182,6 +184,72 @@
                             </exclude>
                         </excludes>
                     </configuration>
+                </plugin>
+                <!--
+                  Coverage gate. In pluginManagement so each module opts in by
+                  declaring the plugin: api-gateway, export-service and
+                  archive-service have no tests and are deliberately outside
+                  the gate. That is visible here rather than hidden behind a
+                  zero threshold.
+
+                  There is no aggregate gate to be had — jacoco:check takes a
+                  single dataFile and analyses the current project's classes,
+                  so in the empty coverage module it finds nothing and passes
+                  vacuously. Hence merge: one exec file per module combining
+                  unit and integration data, which is the only way check sees
+                  the real number. invoice-service reads 8% on unit data alone
+                  and 56% merged.
+                -->
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <executions>
+                        <execution>
+                            <id>merge-exec</id>
+                            <!-- merge binds to generate-resources by default,
+                                 which is long before any .exec file exists.
+                                 post-integration-test is after both agents
+                                 have written. -->
+                            <phase>post-integration-test</phase>
+                            <goals>
+                                <goal>merge</goal>
+                            </goals>
+                            <configuration>
+                                <fileSets>
+                                    <fileSet>
+                                        <directory>${project.build.directory}</directory>
+                                        <includes>
+                                            <include>jacoco.exec</include>
+                                            <include>jacoco-it.exec</include>
+                                        </includes>
+                                    </fileSet>
+                                </fileSets>
+                                <destFile>${project.build.directory}/jacoco-merged.exec</destFile>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>check</id>
+                            <phase>verify</phase>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                            <configuration>
+                                <dataFile>${project.build.directory}/jacoco-merged.exec</dataFile>
+                                <rules>
+                                    <rule>
+                                        <element>BUNDLE</element>
+                                        <limits>
+                                            <limit>
+                                                <counter>INSTRUCTION</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${coverage.minimum}</minimum>
+                                            </limit>
+                                        </limits>
+                                    </rule>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
                 </plugin>
             </plugins>
         </pluginManagement>

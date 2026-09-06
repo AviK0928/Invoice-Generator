@@ -17,6 +17,7 @@ COPY invoice-service/pom.xml   invoice-service/
 COPY export-service/pom.xml    export-service/
 COPY import-service/pom.xml    import-service/
 COPY archive-service/pom.xml   archive-service/
+COPY coverage/pom.xml          coverage/
 
 RUN mvn -B -pl ${SERVICE} -am dependency:go-offline -DskipTests
 
