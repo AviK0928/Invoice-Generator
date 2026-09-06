@@ -1,0 +1,42 @@
+spring:
+    jpa:
+        hibernate:
+            ddl-auto: validate
+        show-sql: false
+        open-in-view: false
+
+    flyway:
+        enabled: true
+        clean-disabled: false
+
+    kafka:
+        bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+        consumer:
+            group-id: export-service-test
+            auto-offset-reset: earliest
+        admin:
+            # The unit is mandatory. operationTimeout binds as a Duration with
+            # no @DurationUnit, so a bare "5" is five MILLISECONDS.
+            fail-fast: false
+            operation-timeout: 10s
+
+# Deliberately tiny so the cap is reachable in a test. Two invoices pass, three
+# are rejected — the production default of 500 could not be exercised without
+# building 501 fixtures.
+export:
+    max-invoices: 2
+
+springdoc:
+    api-docs:
+        enabled: false
+    swagger-ui:
+        enabled: false
+
+logging:
+    level:
+        root: WARN
+        com.example.invoice: INFO
+        kafka: WARN
+        org.apache.kafka: WARN
+        org.springframework.kafka: WARN
+        state.change.logger: ERROR
