@@ -87,11 +87,14 @@ as a design.
 Fill in <user-password> in all four places — the table, the Swagger step, and the curl block. Use the one you verified returns 200 against $APP.
 
 The last paragraph is what makes publishing a single account honest: you say plainly that the role mechanism exists and isn't enforced, rather than letting a reviewer discover it and wonder what else is claimed but absent. It pairs with the Not included, deliberately bullet:
-
-markdown
 - **No method-level authorization.** Roles are issued in the token and mapped to
   authorities; nothing consumes them. The `admin` and `user` accounts have
   identical access. The mechanism is complete, the policy is not.
+
+There is seeded data: three customers, three invoices in `SUCCESSFUL`, `PENDING`
+and `OVERDUE`, and one PDF already generated and waiting at request id
+`9322bc05-5553-4e1d-b9c2-27f3381cf414` — `GET /api/exports/pdf/{requestId}`
+downloads it, and the download deletes it.
 
 ---
 
