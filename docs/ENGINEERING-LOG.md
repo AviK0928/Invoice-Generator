@@ -2924,3 +2924,73 @@ invoice-service's new PDF-ready consumer does an inbox check; its three older
 consumers do not. archive-service has none at all. Three different answers to
 the same question across one system. Not fixed, and worth deciding deliberately
 rather than by accretion.
+
+## Inbox consistency, decided rather than applied
+
+The open item read "add an inbox to the consumers that lack one". Reading them
+changed the answer.
+
+invoice-service's three older consumers are all naturally idempotent. Saving a
+customer by assigned id is an upsert. Clearing an already-cleared archived flag
+changes nothing. `deleteInvoiceById` is the unchecked variant whose own javadoc
+says the invoice may already be gone and that is not an error. Redelivering any
+of them produces the same state, and an inbox would add a table write per event
+to prevent nothing.
+
+archive-service was the real case: `saveArchivedInvoice` hits
+`uk_archived_invoices_invoice_id` on redelivery, throws, and dead-letters. The
+archive stayed correct — the constraint saw to that — but at-least-once
+delivery produced an alert for something working as intended. It now checks the
+inbox, and the test that previously asserted the constraint violation asserts
+the skip instead.
+
+So the consistency worth having is not "every consumer checks" but "every
+consumer's choice is stated". Four class javadocs now say which and why, each
+naming its own reason rather than repeating a generic one.
+
+**The load-bearing fact** is that `deleteById` on a missing row is a no-op in
+current Spring Data JPA (`findById(id).ifPresent(this::delete)`), not the
+`EmptyResultDataAccessException` older versions threw. Two of the three
+justifications rest on that.
+
+## common's first tests found a bug they were written after
+
+`CsvUtil` and `HashUtil` are pure and used by three services between them, so
+they are unit tested where they live rather than incidentally through someone
+else's integration tests. Eleven tests, no Spring context, ten seconds.
+
+The `withHeader` deprecation fix was made in the same edit, and it dropped the
+`for` loop that writes the rows — leaving a method that emitted a header and no
+data. Every CSV test failed identically, which is what made it obvious: five
+failures across quoting, nulls and plain rows all showing the header alone is
+not five bugs.
+
+export-service's `csvResolvesTheCustomerJoin` would have caught it too, but
+only on a full reactor run after a container start. The unit tests caught it in
+ten seconds, in the same session that introduced it. That is the argument for
+testing shared utilities where they live.
+
+The null-cell test also drove `setNullString("")`, so a null customer field
+writes empty rather than the text "null".
+
+## common is measured but not gated
+
+`jacoco.haltOnFailure=false`, not `jacoco.skip`.
+
+common's own report reads 11% because it sees only its own exec file. The
+outbox, inbox and `BaseExceptionHandler` are heavily covered — by the
+integration tests of the four services that use them, which write to *their*
+exec files. The aggregate counts that; a per-module `check` cannot see it. So
+11% is a real measurement of the wrong thing, and gating on it would mean
+either a threshold low enough to gate nothing or Spring-context tests
+duplicating what four modules already prove.
+
+`jacoco.skip` would have disabled the agent as well, dropping this module's
+unit coverage out of the aggregate too. `haltOnFailure` keeps the measurement
+and the warning, and removes only the failure.
+
+**Also corrected here:** JaCoCo is declared in the parent's `<build><plugins>`,
+so every module inherits it. Modules were not opting in by declaring the plugin
+— those declarations were redundant. What made a module effectively un-gated
+was having no merged exec file, which made `check` skip. `common` had none
+until it had tests.

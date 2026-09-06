@@ -25,10 +25,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 // service's own package and every entity silently disappears.
 @EntityScan(basePackages = {
 		"com.example.invoice.archive_service",
-		"com.example.invoice.common.outbox" })
+		"com.example.invoice.common.outbox",
+		"com.example.invoice.common.inbox" })
 @EnableJpaRepositories(basePackages = {
 		"com.example.invoice.archive_service",
-		"com.example.invoice.common.outbox" })
+		"com.example.invoice.common.outbox",
+		"com.example.invoice.common.inbox" })
 public class ArchiveServiceApplication {
 
 	public static void main(String[] args) {

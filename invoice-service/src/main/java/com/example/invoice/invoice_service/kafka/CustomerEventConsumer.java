@@ -9,6 +9,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+/**
+ * No inbox check, deliberately. Every path here is naturally idempotent — save
+ * by assigned id is an upsert, delete of a missing row is a no-op — so a
+ * redelivery produces the same state. An inbox would add a table write per
+ * event to prevent nothing. Consumers whose effects are not idempotent
+ * (archive-service's archive, export-service's PDF) do check.
+ */
 @Component
 @RequiredArgsConstructor
 public class CustomerEventConsumer {

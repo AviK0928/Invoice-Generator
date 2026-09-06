@@ -9,6 +9,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+/**
+ * No inbox check, deliberately. deleteInvoiceById is unchecked — deleting an
+ * invoice that is already gone is a no-op, not an error — so a redelivery
+ * produces the same state. An inbox would add a table write per event to
+ * prevent nothing. Consumers whose effects are not idempotent
+ * (archive-service's archive, export-service's PDF) do check.
+ */
 @Component
 @RequiredArgsConstructor
 @Slf4j

@@ -7,6 +7,7 @@ import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -22,14 +23,16 @@ public class ArchiveEventConsumer {
 
     @KafkaListener(topics = TOPIC, groupId = GROUP_ID, containerFactory = CONTAINER_FACTORY)
 
-    public void consume(ArchiveEventDTO dto) {
+    public void consume(
+            ArchiveEventDTO dto,
+            @Header(name = "X-Event-Id", required = false) String eventId) {
         if (dto.getEventType() != ArchiveEventType.MANUAL_ARCHIVE &&
                 dto.getEventType() != ArchiveEventType.AUTO_ARCHIVE) {
             log.debug("Skipping non-archive event: {}", dto.getEventType());
             return;
         }
 
-        archiveService.saveArchivedInvoice(dto);
+        archiveService.saveArchivedInvoice(dto, eventId);
         log.info("Archived invoice processed for invoiceId={}", dto.getInvoiceId());
     }
 }

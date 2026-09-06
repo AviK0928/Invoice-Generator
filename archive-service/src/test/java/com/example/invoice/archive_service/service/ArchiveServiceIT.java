@@ -7,6 +7,7 @@ import com.example.invoice.archive_service.repository.ArchivedInvoiceItemReposit
 import com.example.invoice.archive_service.repository.ArchivedInvoiceRepository;
 import com.example.invoice.common.enums.ArchiveEventType;
 import com.example.invoice.common.enums.PaymentStatus;
+import com.example.invoice.common.inbox.ProcessedEventRepository;
 import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.kafka.dto.ArchiveEventDTO;
 import com.example.invoice.common.kafka.dto.ArchiveItemDTO;
@@ -15,7 +16,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 
 import java.math.BigDecimal;
@@ -33,6 +33,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * up archived nowhere and active nowhere. That is the failure the outbox was
  * introduced to close, and asserting the row exists after the delete is what
  * proves they share a transaction.
+ *
+ * Every call passes an event id because saveArchivedInvoice is now
+ * inbox-checked. Ids are unique per invoice within a test: reusing one would
+ * silently skip the second invoice rather than archiving it.
  */
 class ArchiveServiceIT extends IntegrationTest {
 
@@ -46,18 +50,23 @@ class ArchiveServiceIT extends IntegrationTest {
     ArchivedInvoiceItemRepository itemRepository;
     @Autowired
     OutboxEventRepository outboxRepository;
+    @Autowired
+    ProcessedEventRepository processedEventRepository;
 
     @BeforeEach
     void clean() {
         itemRepository.deleteAll();
         invoiceRepository.deleteAll();
         outboxRepository.deleteAll();
+        // Without this the inbox outlives the data it was recording, and the
+        // second test to use a given event id archives nothing.
+        processedEventRepository.deleteAll();
     }
 
     @Test
     @DisplayName("an archive event is stored and reads back with its items")
     void archiveRoundTrip() {
-        archiveService.saveArchivedInvoice(event(1001L));
+        archiveService.saveArchivedInvoice(event(1001L), "invoice-service:1001");
 
         ArchiveResponseDTO archived = archiveService.getArchivedInvoice(1001L);
 
@@ -82,7 +91,7 @@ class ArchiveServiceIT extends IntegrationTest {
     @Test
     @DisplayName("unarchiving removes the archive and records the event together")
     void unarchiveDeletesAndRecordsInOneTransaction() {
-        archiveService.saveArchivedInvoice(event(1001L));
+        archiveService.saveArchivedInvoice(event(1001L), "invoice-service:1001");
         assertThat(archiveService.existsByInvoiceId(1001L)).isTrue();
 
         unarchiveService.unarchiveInvoice(1001L);
@@ -107,9 +116,12 @@ class ArchiveServiceIT extends IntegrationTest {
     @Test
     @DisplayName("the search filters by customer and date range")
     void searchFilters() {
-        archiveService.saveArchivedInvoice(event(1001L, 1L, LocalDate.of(2026, 9, 10)));
-        archiveService.saveArchivedInvoice(event(1002L, 2L, LocalDate.of(2026, 9, 10)));
-        archiveService.saveArchivedInvoice(event(1003L, 1L, LocalDate.of(2026, 12, 1)));
+        archiveService.saveArchivedInvoice(
+                event(1001L, 1L, LocalDate.of(2026, 9, 10)), "invoice-service:1001");
+        archiveService.saveArchivedInvoice(
+                event(1002L, 2L, LocalDate.of(2026, 9, 10)), "invoice-service:1002");
+        archiveService.saveArchivedInvoice(
+                event(1003L, 1L, LocalDate.of(2026, 12, 1)), "invoice-service:1003");
 
         var byCustomer = archiveService.listArchived(1L, null, null, PageRequest.of(0, 20));
         assertThat(byCustomer.getContent())
@@ -129,23 +141,28 @@ class ArchiveServiceIT extends IntegrationTest {
     }
 
     @Test
-    @DisplayName("a redelivered archive event is refused by the database, not deduplicated")
-    void redeliveryIsRefusedByTheUniqueConstraint() {
-        archiveService.saveArchivedInvoice(event(1001L));
+    @DisplayName("a redelivered archive event is skipped, not dead-lettered")
+    void redeliveryIsSkipped() {
+        archiveService.saveArchivedInvoice(event(1001L), "invoice-service:1001");
+        archiveService.saveArchivedInvoice(event(1001L), "invoice-service:1001");
 
-        // archive-service has no inbox, unlike export-service, so nothing here
-        // recognises a repeat event. What stops a second archive row is the
-        // unique constraint on invoice_id in the migration.
-        assertThatThrownBy(() -> archiveService.saveArchivedInvoice(event(1001L)))
-                .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("uk_archived_invoices_invoice_id");
+        // Before the inbox this threw on uk_archived_invoices_invoice_id and
+        // dead-lettered. The archive was correct either way; the cost was an
+        // alert for a redelivery that at-least-once delivery makes normal.
+        assertThat(invoiceRepository.findAll()).hasSize(1);
+        assertThat(itemRepository.findByInvoiceId(1001L)).hasSize(1);
+        assertThat(processedEventRepository.count()).isOne();
+    }
+
+    @Test
+    @DisplayName("an event with no id is processed without a dedup check")
+    void missingEventIdStillProcesses() {
+        // Publishers not on the outbox send no X-Event-Id header. Those events
+        // still have to be processed; they simply get no protection.
+        archiveService.saveArchivedInvoice(event(1001L), null);
 
         assertThat(invoiceRepository.findAll()).hasSize(1);
-
-        // Worth knowing what this costs: the consumer does not catch this, so
-        // at-least-once redelivery ends in the DLT rather than being skipped.
-        // The archive stays correct; the operator gets a dead letter to explain.
-        // An inbox check would make it silent, as in export-service.
+        assertThat(processedEventRepository.count()).isZero();
     }
 
     // ------------------------------------------------------------- fixtures
