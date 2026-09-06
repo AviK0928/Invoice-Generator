@@ -1,9 +1,7 @@
 # Deployment
 
-Two supported topologies. The hosted demo uses the first; the second is the
-reference architecture and is what the compose file and k8s manifests describe.
-
-See [ADR 003](adr/003-deploy-as-a-single-service.md) for why.
+Two topologies. The hosted demo uses the first; the second is the reference
+architecture. See [ADR 003](adr/003-deploy-as-a-single-service.md) for why.
 
 ---
 
@@ -11,39 +9,83 @@ See [ADR 003](adr/003-deploy-as-a-single-service.md) for why.
 
 One process, one database, no broker. Events dispatch in-process via the outbox.
 
-**Requirements:** a Postgres instance and a container host.
+**Live:** https://invoice-generator-e1z8.onrender.com
+
+### What the `app` module is
+
+An assembly. It depends on the five service jars and adds only what one process
+needs that six did not:
+
+- one datasource and one consolidated schema (`app/src/main/resources/db/migration/app`)
+- `InProcessOutboxEventPublisher`, routing outbox events straight to the existing
+  `@KafkaListener` beans, which are inert because Kafka auto-configuration is
+  excluded
+- a servlet security chain, since the gateway is WebFlux and cannot be in the
+  same process
+- one OpenAPI spec replacing the five per-service ones
+
+No service class is modified. The build produces it from the same Dockerfile as
+any service, selected by `SERVICE=app` — which is the default, so a host that
+cannot pass build arguments needs no configuration.
+
+### Database
+
+Any Postgres reachable over TLS. The demo uses a Neon free tier in Singapore,
+matching the web service's region — app-to-database latency matters more than
+user-to-app, since a request makes several round trips.
+
+Deliberately **not** the host's own free Postgres, which is deleted 30 days after
+creation. A demo on a deletion timer is the same failure mode ADR 003 rejected
+Oracle for.
+
+### Deploying
 
 ```bash
-# 1. Provision Postgres — Neon or Supabase free tier. Not Render's, which is
-#    deleted 30 days after creation.
-
-# 2. Set environment variables on the host
+# 1. Provision Postgres. Split the connection string into three values —
+#    the driver will not accept it as given:
 DB_URL=jdbc:postgresql://<host>/<db>?sslmode=require
-DB_USER=...
-DB_PASS=...
-JWT_SECRET=$(openssl rand -hex 32)
-ADMIN_PASSWORD_HASH=...      # docker run --rm httpd:alpine htpasswd -bnBC 10 "" pw | tr -d ':\n'
-USER_PASSWORD_HASH=...
-SPRING_PROFILES_ACTIVE=cloud
-SPRINGDOC_ENABLED=true       # off by default in the cloud profile
+DB_USER=<user>
+DB_PASS=<password>
 
-# 3. Deploy
-#    Render reads render.yaml. Any other Docker host:
-docker build --build-arg SERVICE=app -t invoice-generator .
+# 2. Generate secrets
+JWT_SECRET=$(openssl rand -hex 32)     # hex, not base64: base64 contains $
+docker run --rm httpd:alpine htpasswd -bnBC 10 "" '<password>' | tr -d ':\n'
+
+# 3. Set on the host
+SPRING_PROFILES_ACTIVE=cloud
+ADMIN_PASSWORD_HASH=...
+USER_PASSWORD_HASH=...
+SPRINGDOC_ENABLED=true
+
+# 4. Deploy. Render reads render.yaml. Any other Docker host:
+docker build -t invoice-generator .
 docker run -p 8080:8080 --env-file .env invoice-generator
 ```
 
-Flyway runs the migrations on first start. Health check is `/actuator/health`.
+The `cloud` profile has **no default** for `JWT_SECRET`, and neither password
+hash has one in any profile. Startup fails without them rather than running on
+the development key committed to `application.yml`. That is intentional.
 
-**Known limitation:** free-tier instances sleep after 15 minutes. The first
-request after idle takes 30–60 seconds.
+Flyway applies six migrations on first start. Health check is
+`/actuator/health`, which is permitted unauthenticated.
+
+### Known limitations
+
+- **Cold start ~94 seconds.** The instance sleeps after 15 minutes idle, and
+  0.1 CPU is the binding constraint. The platform documents 30–60 seconds; a JVM
+  starting six modules' worth of context on a tenth of a core takes longer.
+- **The database sleeps too**, adding a second or two on top.
+- **One topic routes to one consumer.** Kafka would fan out to consumer groups;
+  the in-process publisher does not. No topic has two consumers today, so this
+  holds — by assumption, not by construction.
+- **`processed_events` is one table** for what was three, keyed by the publishing
+  service's event id. Same assumption as above, in a second place.
 
 ---
 
 ## B. Six services with Kafka (reference architecture)
 
-What the system is designed as. Runs locally with one command, and on any host
-with ~4 GB of RAM.
+What the system is designed as. Runs locally with one command.
 
 ### Locally
 
@@ -52,54 +94,34 @@ cp .env.example .env    # fill in the secrets
 docker compose up -d --build
 ```
 
-Eight containers: five services, the gateway, Kafka (KRaft, no Zookeeper) and
-one Postgres holding five databases. Gateway on 8080; services on 8081–8085,
-published for development so a single service can be exercised directly.
-
-Cold start is ~90 seconds — the gateway waits for all five services to report
-healthy rather than accepting traffic and returning 502s.
+Eight containers: five services, the gateway, Kafka (KRaft, no ZooKeeper) and one
+Postgres holding five databases. Gateway on 8080; services on 8081–8085,
+published so a single service can be exercised directly.
 
 ```bash
-# Verify
 docker compose ps                        # eight containers, all (healthy)
 curl -s localhost:8080/actuator/health
 ```
 
+For a fast edit-test loop, `./run.sh <service> [profile]` starts Postgres and
+Kafka in Docker and runs one service natively.
+
 ### On a VM
 
-Any host with 4 GB RAM and Docker. Costs about $20–25/month on a small VPS.
+Any host with 4 GB of RAM and Docker. In front of it:
 
-```bash
-git clone https://github.com/AviK0928/Invoice-Generator
-cd Invoice-Generator
-cp .env.example .env    # set real secrets — see below
-docker compose up -d --build
-```
-
-Then in front of it:
-
-- A reverse proxy (Caddy or nginx) terminating TLS on the gateway only
-- Firewall closing 8081–8085 and 5432 — **the compose file publishes these for
-  local development, and they are unauthenticated**. Authentication lives at the
-  gateway (see [ADR 001](adr/001-gateway-owns-authentication.md)).
-- Set `SPRING_PROFILES_ACTIVE=cloud`
-
-Comment out the `ports:` blocks on the five services before exposing this host
-to a network.
+- a reverse proxy terminating TLS on the gateway only
+- a firewall closing 8081–8085 and 5432 — **the compose file publishes these for
+  local development and they are unauthenticated**. Authentication lives at the
+  gateway ([ADR 001](adr/001-gateway-owns-authentication.md)). Comment out the
+  `ports:` blocks on the five services before exposing the host.
+- `SPRING_PROFILES_ACTIVE=cloud`
 
 ### On Kubernetes
 
-`k8s/` contains Deployments with liveness and readiness probes wired to
-Actuator, Services, ConfigMaps, Secrets, an Ingress and an HPA, with Kustomize
-overlays for dev and prod.
-
-```bash
-kind create cluster --name invoice-generator
-kubectl apply -k k8s/overlays/dev
-kubectl port-forward svc/api-gateway 8080:8080
-```
-
-Verified against `kind`. Not deployed to a managed cluster — see ADR 003.
+Not provided. Manifests would be a reasonable addition; writing them without a
+cluster to verify against would be a claim rather than a capability, so the
+repository does not make one.
 
 ---
 
@@ -107,11 +129,7 @@ Verified against `kind`. Not deployed to a managed cluster — see ADR 003.
 
 | Variable | Notes |
 |---|---|
-| `JWT_SECRET` | `openssl rand -hex 32`. Hex, not base64 — base64 contains `$`, which Compose treats as variable substitution. |
-| `ADMIN_PASSWORD_HASH` | bcrypt. Single-quote it in `.env`, or the `$` characters are substituted away. |
+| `JWT_SECRET` | `openssl rand -hex 32`. Hex, not base64 — base64 contains `$`, which Compose treats as variable substitution. Must be at least 32 bytes; startup fails below that. |
+| `ADMIN_PASSWORD_HASH` | bcrypt. Single-quote the password when generating, or `$` and spaces are mangled by the shell. |
 | `USER_PASSWORD_HASH` | as above |
 | `POSTGRES_PASSWORD` | local compose only |
-
-The `cloud` profile has **no default** for `JWT_SECRET`. Startup fails without
-it, rather than falling back to the development key committed in
-`application.yml`.

@@ -9,10 +9,10 @@ Status: Accepted
 a CSV, published `DELETE_INVOICE` events, then deleted the rows.
 
 The export destination was `new File("exports/")` — relative to the working
-directory, inside the container. On an ephemeral filesystem it does not survive
-a restart. The job therefore exported to nowhere, permanently destroyed the
-archive, and instructed invoice-service to delete its copies too. No
-transaction, no verification, no durable output.
+directory, inside the container. On an ephemeral filesystem it does not survive a
+restart. The job therefore exported to nowhere, permanently destroyed the
+archive, and instructed invoice-service to delete its copies too. No transaction,
+no verification, no durable output.
 
 It had never run: `ArchiveServiceApplication` was missing `@EnableScheduling`.
 Adding that annotation — on the reasoning that the scheduler was dead code —
@@ -24,9 +24,10 @@ Delete the scheduler and its export service rather than repair them.
 
 ## Consequences
 
-**There is no automated retention, and no automated backup.** The README says
-so. Backup and point-in-time recovery are delegated to the managed Postgres
-provider, which does it better than a homegrown CSV dump would.
+**There is no automated retention, and no automated backup.** Backup and
+point-in-time recovery are delegated to the managed Postgres provider, which does
+it better than a homegrown CSV dump would. The README states this among the
+deliberate omissions.
 
 **The archive grows unbounded.** Irrelevant at current data volumes.
 
@@ -38,6 +39,9 @@ provider, which does it better than a homegrown CSV dump would.
 | Transactional outbox | dying at event 3 of 50 leaves 3 invoices deleted with no archive |
 | Verify-before-delete | confirm the object exists and checksums match |
 | Single-instance locking | two replicas both fire `@Scheduled` |
+
+The outbox prerequisite has since been met ([ADR 004](004-kafka-event-delivery.md)).
+The other three have not.
 
 ## Return path
 
