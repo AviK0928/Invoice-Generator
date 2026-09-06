@@ -3071,3 +3071,64 @@ to live with.
 76%, 3,841 of 5,034 instructions. The arc across the project:
 8% (unit tests only) → 34% (integration data included) → 42% (api-gateway) →
 65% (export and archive) → 70% (async PDF) → 76% (customer-service).
+
+## Repackage replaces the main artifact
+
+The consolidated deployment needs an `app` module depending on the five
+services. It could not have one as things stood: `spring-boot:repackage`
+replaces the main artifact rather than attaching a second one, so
+`invoice-service-0.0.1-SNAPSHOT.jar` *was* the fat jar. A module depending on it
+would get a nested `BOOT-INF` where Maven expects classes at the root.
+
+`<classifier>exec</classifier>` on the plugin in the parent's `pluginManagement`
+fixes it in one place. Each service now produces `x.jar`, a plain library jar,
+and `x-exec.jar`, the runnable one. `common` is untouched — it never declares
+the plugin, the same asymmetry that keeps it a library.
+
+The immediate consequence is that `target/*.jar` now matches two files, and the
+Dockerfile's `cp ${SERVICE}/target/*.jar /build/app.jar` would have died with
+"target is not a directory" on all six image builds. Changed to `*-exec.jar` in
+the same commit — this is one of those pairs where the second half is not
+cleanup, it is the difference between a working build and a broken one.
+
+Verification was deliberately not "BUILD SUCCESS", which would have been just as
+true with the classifier on the wrong artifact. `unzip -l | grep -c BOOT-INF`
+reads 0 for the plain jar and 163 for the exec jar, which is the actual claim.
+
+Two comments in the parent had gone stale and were corrected while in there: the
+module count in the aggregator note, and the JaCoCo gate comment still naming
+api-gateway, export-service and archive-service as untested. Every module has
+tests now; six are gated and `common` is measured but not.
+
+## A publisher seam in the outbox
+
+The consolidated deployment has no broker, and `OutboxConfiguration` required a
+`KafkaTemplate` to build the dispatcher at all. The app module would have failed
+at context startup on a missing bean before reaching a single line of its own
+code.
+
+`OutboxEventPublisher` is now the delivery contract: an event id and an event,
+publish synchronously, throw on failure. `KafkaOutboxEventPublisher` holds what
+used to be inline in `OutboxDispatcher.publish` — record construction, the two
+headers, the five-second blocking send. The dispatcher keeps the event-id prefix
+because it owns `spring.application.name`, and keeps every claiming, backoff and
+retention decision. It no longer imports a Kafka class.
+
+Selection is `@ConditionalOnProperty(name = "outbox.transport", havingValue =
+"kafka", matchIfMissing = true)` rather than `@ConditionalOnMissingBean`.
+Bean-presence conditions evaluate against what has been registered so far, and
+in a plain `@Configuration` — as opposed to an auto-configuration class, where
+ordering is guaranteed — that makes the winner depend on scan order. The
+property is deterministic, and it puts the reason the Kafka publisher is absent
+in the deployment's YAML instead of leaving it to be inferred.
+
+The header constants moved to the interface, since they describe a wire format
+the dispatcher no longer writes. Two lines of `OutboxDispatcherIT` changed to
+match. Nothing else did: that test asserts both headers on the wire and the
+published flag, and it passes unmodified in substance, which is the whole
+verification for a refactor whose contract is "behaves identically".
+
+Sequencing note: the deployment plan had the assembly skeleton first and this
+second. Wrong way round — the skeleton cannot start without the seam. Found by
+reading `OutboxConfiguration`'s bean signature rather than by a failing build,
+which is the cheaper of the two.

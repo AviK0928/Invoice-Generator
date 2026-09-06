@@ -36,7 +36,7 @@ COPY import-service/src    import-service/src
 COPY archive-service/src   archive-service/src
 
 RUN mvn -B -pl ${SERVICE} -am clean package -DskipTests \
-    && cp ${SERVICE}/target/*.jar /build/app.jar
+    && cp ${SERVICE}/target/*-exec.jar /build/app.jar
 
 # ---------- Stage 2: runtime ----------
 FROM eclipse-temurin:21-jre-jammy

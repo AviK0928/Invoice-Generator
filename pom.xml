@@ -20,17 +20,6 @@
     <name>invoice-generator</name>
     <description>Invoice Generator - multi-module reactor build</description>
 
-    <!--
-      Aggregator AND parent. Every module inherits from here, and this POM
-      inherits from spring-boot-starter-parent, so the Boot BOM, the Java
-      level and the -parameters compiler flag reach all seven modules from
-      one place instead of being repeated in each.
-
-      Note what does NOT follow from that: inheriting the Boot parent does not
-      make a module a Boot application. Only declaring spring-boot-maven-plugin
-      with the repackage goal does. `common` inherits from here and still
-      produces a plain library jar.
-    -->
     <modules>
         <module>common</module>
         <module>api-gateway</module>
@@ -177,6 +166,18 @@
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
                     <configuration>
+                        <!--
+                        The classifier is what makes `app` possible. Without it repackage
+                        REPLACES the main artifact, so a module depending on a service gets
+                        a fat jar with nested BOOT-INF on its classpath. With it, each
+                        service produces two artifacts: x.jar, a plain library jar that
+                        `app` and `coverage` can depend on, and x-exec.jar, the runnable
+                        one. `common` is unaffected — it never declares this plugin.
+
+                        Anything that consumed target/*.jar must now name -exec.jar
+                        explicitly: two jars match the glob.
+                        -->
+                        <classifier>exec</classifier>
                         <excludes>
                             <exclude>
                                 <groupId>org.projectlombok</groupId>
@@ -185,21 +186,6 @@
                         </excludes>
                     </configuration>
                 </plugin>
-                <!--
-                  Coverage gate. In pluginManagement so each module opts in by
-                  declaring the plugin: api-gateway, export-service and
-                  archive-service have no tests and are deliberately outside
-                  the gate. That is visible here rather than hidden behind a
-                  zero threshold.
-
-                  There is no aggregate gate to be had — jacoco:check takes a
-                  single dataFile and analyses the current project's classes,
-                  so in the empty coverage module it finds nothing and passes
-                  vacuously. Hence merge: one exec file per module combining
-                  unit and integration data, which is the only way check sees
-                  the real number. invoice-service reads 8% on unit data alone
-                  and 56% merged.
-                -->
                 <plugin>
                     <groupId>org.jacoco</groupId>
                     <artifactId>jacoco-maven-plugin</artifactId>

@@ -1,6 +1,8 @@
 package com.example.invoice.common.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -28,8 +30,15 @@ public class OutboxConfiguration {
     }
 
     @Bean
-    public OutboxDispatcher outboxDispatcher(OutboxEventRepository repository,
+    @ConditionalOnProperty(name = "outbox.transport", havingValue = "kafka", matchIfMissing = true)
+    public OutboxEventPublisher kafkaOutboxEventPublisher(
             KafkaTemplate<String, String> stringKafkaTemplate) {
-        return new OutboxDispatcher(repository, stringKafkaTemplate);
+        return new KafkaOutboxEventPublisher(stringKafkaTemplate);
+    }
+
+    @Bean
+    public OutboxDispatcher outboxDispatcher(OutboxEventRepository repository,
+            OutboxEventPublisher publisher) {
+        return new OutboxDispatcher(repository, publisher);
     }
 }

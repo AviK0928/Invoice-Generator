@@ -90,14 +90,6 @@
                             <goal>check</goal>
                         </goals>
                         <configuration>
-                            <!--
-                              30% against a measured 34%. A floor, not a
-                              target: it exists to catch a drop, and should be
-                              raised as api-gateway, export-service and
-                              archive-service get tests. Picking a number
-                              before measuring would have been guesswork —
-                              the unit-only figure was 8%.
-                            -->
                             <rules>
                                 <rule>
                                     <element>BUNDLE</element>

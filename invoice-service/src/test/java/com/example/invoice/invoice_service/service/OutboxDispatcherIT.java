@@ -3,6 +3,7 @@ package com.example.invoice.invoice_service.service;
 import com.example.invoice.common.enums.PaymentStatus;
 import com.example.invoice.common.kafka.Topics;
 import com.example.invoice.common.outbox.OutboxDispatcher;
+import com.example.invoice.common.outbox.OutboxEventPublisher;
 import com.example.invoice.common.outbox.OutboxEventRepository;
 import com.example.invoice.invoice_service.IntegrationTest;
 import com.example.invoice.invoice_service.dto.InvoiceItemDTO;
@@ -124,9 +125,9 @@ class OutboxDispatcherIT extends IntegrationTest {
 
         // Consumers key their idempotency check on the event id, which
         // at-least-once delivery makes them need.
-        assertThat(header(record, OutboxDispatcher.EVENT_ID_HEADER))
+        assertThat(header(record, OutboxEventPublisher.EVENT_ID_HEADER))
                 .startsWith("invoice-service:");
-        assertThat(header(record, OutboxDispatcher.EVENT_TYPE_HEADER))
+        assertThat(header(record, OutboxEventPublisher.EVENT_TYPE_HEADER))
                 .isEqualTo("CREATED");
 
         // Marked published only after the broker acknowledged it. The reverse

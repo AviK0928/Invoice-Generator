@@ -2,24 +2,25 @@ package com.example.invoice.common.outbox;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
- * Delivers recorded events to Kafka.
+ * Claims recorded events and hands them to a publisher.
  *
- * Runs after the domain transaction has committed, so a broker outage delays
- * events rather than failing writes. Delivery is at-least-once: a publish that
- * succeeds but whose mark-published fails will republish. Consumers must be
- * idempotent.
+ * Runs after the domain transaction has committed, so a transport outage
+ * delays events rather than failing writes. Delivery is at-least-once: a
+ * publish that succeeds but whose mark-published fails will republish.
+ * Consumers must be idempotent.
+ *
+ * What is delivered over is not this class's concern — see
+ * {@link OutboxEventPublisher}. Kafka is the default; the consolidated
+ * deployment substitutes an in-process publisher and everything here is
+ * unchanged.
  *
  * Shared by every publishing service. Nothing here is service-specific — the
  * event-id prefix comes from spring.application.name.
@@ -28,18 +29,14 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class OutboxDispatcher {
 
-    public static final String EVENT_ID_HEADER = "X-Event-Id";
-    public static final String EVENT_TYPE_HEADER = "X-Event-Type";
-
     /** 2^8 = 256s, capped at 300. Reached by roughly the eighth attempt. */
     private static final int MAX_BACKOFF_EXPONENT = 8;
     private static final long MAX_BACKOFF_SECONDS = 300;
     private static final int MAX_ERROR_LENGTH = 2000;
-    private static final int PUBLISH_TIMEOUT_SECONDS = 5;
     private static final int RETENTION_DAYS = 7;
 
     private final OutboxEventRepository repository;
-    private final KafkaTemplate<String, String> stringKafkaTemplate;
+    private final OutboxEventPublisher publisher;
 
     @Value("${outbox.batch-size:100}")
     private int batchSize;
@@ -72,21 +69,13 @@ public class OutboxDispatcher {
     }
 
     /**
-     * Synchronous by design. An async send would let the transaction commit
-     * before delivery is known, marking rows published that never left.
+     * The publisher returns only once delivery is known — that contract is
+     * what makes marking the row here safe. See {@link OutboxEventPublisher}.
      */
     private void publish(OutboxEvent event) throws Exception {
-        ProducerRecord<String, String> record = new ProducerRecord<>(
-                event.getTopic(), event.getEventKey(), event.getPayload());
-
         // Stable and unique across services. Consumers key their idempotency
         // check on this — at-least-once delivery means they will see it again.
-        record.headers().add(EVENT_ID_HEADER,
-                (serviceName + ":" + event.getId()).getBytes(StandardCharsets.UTF_8));
-        record.headers().add(EVENT_TYPE_HEADER,
-                event.getEventType().getBytes(StandardCharsets.UTF_8));
-
-        stringKafkaTemplate.send(record).get(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        publisher.publish(serviceName + ":" + event.getId(), event);
 
         event.setPublishedAt(LocalDateTime.now());
         event.setLastError(null);
