@@ -6,22 +6,16 @@
 	<modelVersion>4.0.0</modelVersion>
 
 	<parent>
-		<groupId>org.springframework.boot</groupId>
-		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>3.5.3</version>
-		<relativePath/>
-	</parent>
+        <groupId>com.example.invoice</groupId>
+        <artifactId>invoice-generator</artifactId>
+        <version>1.0.0</version>
+    </parent>
 
 	<groupId>com.example.invoice</groupId>
 	<artifactId>invoice-service</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>invoice-service</name>
 	<description>Invoice Service for Invoice Generator</description>
-
-	<properties>
-		<java.version>21</java.version>
-		<springdoc.version>2.8.13</springdoc.version>
-	</properties>
 
 	<dependencies>
 
@@ -139,64 +133,13 @@
 
 	<build>
 		<plugins>
+			<!-- Declared, not configured: the Lombok exclusion comes from the
+				parent's pluginManagement. The declaration itself is what opts
+				this module into repackaging. -->
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
-				<configuration>
-					<excludes>
-						<exclude>
-							<groupId>org.projectlombok</groupId>
-							<artifactId>lombok</artifactId>
-						</exclude>
-					</excludes>
-				</configuration>
-			</plugin>
-
-			<!-- *IT classes run under Failsafe in the verify phase, not under
-			     Surefire in test. Keeps fast unit tests separate from the ones
-			     that need Docker. Executions are declared here rather than
-			     inherited: the root POM is an aggregator, not this module's
-			     parent, so its pluginManagement does not apply. -->
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-failsafe-plugin</artifactId>
-				<executions>
-					<execution>
-						<goals>
-							<goal>integration-test</goal>
-							<goal>verify</goal>
-						</goals>
-					</execution>
-				</executions>
 			</plugin>
 		</plugins>
 	</build>
-
-	<profiles>
-		<!--
-		  Testcontainers 1.21 negotiates Docker API 1.32, which the Codespace's
-		  docker-in-docker daemon rejects (minimum 1.40). Activated only when
-		  CI is unset, so it never applies on a GitHub Actions runner where the
-		  daemon is plain and these settings are at best redundant.
-		-->
-		<profile>
-			<id>local-docker</id>
-			<activation>
-				<property>
-					<name>!env.CI</name>
-				</property>
-			</activation>
-			<build>
-				<plugins>
-					<plugin>
-						<groupId>org.apache.maven.plugins</groupId>
-						<artifactId>maven-failsafe-plugin</artifactId>
-						<configuration>
-							<argLine>-Dapi.version=1.43 -Ddocker.host=unix:///var/run/docker.sock</argLine>
-						</configuration>
-					</plugin>
-				</plugins>
-			</build>
-		</profile>
-	</profiles>
 </project>

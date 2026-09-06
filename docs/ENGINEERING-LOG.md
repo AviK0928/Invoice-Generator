@@ -2581,3 +2581,75 @@ missing and no amount of reading the assertion error will tell you that.
 `ProblemDetail` populates `instance` with the request path automatically —
 `BaseExceptionHandler.problem` never sets it. It showed up in the dump before
 anything asserted it. Now asserted in the not-found test, since clients see it.
+
+## Phase 4 (continued) — the root POM becomes a real parent
+
+The root POM was an aggregator; each module declared
+`spring-boot-starter-parent` itself, and shared build config was copy-pasted
+seven times. Its own comment named the promotion as the next step and deferred
+it, on the grounds that changing seven modules' inheritance mid-way through
+building test infrastructure produces failures hard to attribute. With three
+modules under test and 22 tests green, that condition had expired: the change
+touches no test or production code, so a failure could only be structural.
+
+What moved up: the Boot parent, `java.version`,
+`maven.compiler.release`, `springdoc.version`, the `spring-boot-maven-plugin`
+Lombok exclusion, the Failsafe executions, and the `local-docker` profile.
+Modules keep their own coordinates and their own dependencies.
+
+### `common`'s missing parent was self-inflicted
+
+Its POM said it had no parent "so it is not a Spring Boot application," and
+documented two bugs that followed: compiling to Java 8 because `java.version`
+alone sets nothing, and Spring Data failing to bind named query parameters
+because `-parameters` was absent from the bytecode.
+
+The premise was wrong. Inheriting `spring-boot-starter-parent` does not make a
+module an application — only declaring `spring-boot-maven-plugin` with the
+repackage goal does, and `common` declares no such plugin. Both bugs were the
+price of avoiding a parent that was never the problem.
+
+Verified rather than assumed: after the promotion,
+`unzip -l common/target/common-1.5.0.jar` shows a plain library jar, no
+`BOOT-INF/`, no loader classes. The manifest grew from 81 to 142 bytes —
+standard parent-supplied entries, not repackaging.
+
+The parent also removed `common`'s hand-pinned `maven-compiler-plugin` 3.13.0
+and its `spring-boot-dependencies` BOM import. Both existed only to compensate
+for the missing parent. `common` had been the one module building with an
+older compiler and Surefire than the rest, which nobody had noticed.
+
+### pluginManagement configures; plugins declares
+
+The first attempt put Failsafe in the root's `<pluginManagement>` and deleted
+the declarations from five module POMs. **Nine integration tests silently
+stopped running and the build reported SUCCESS.**
+
+`pluginManagement` supplies configuration to a plugin a module already
+declares. It does not add one. With the declarations gone and only management
+left, the executions never bound to a phase, and Failsafe with no bindings does
+nothing quietly.
+
+Nothing in the build output said so. What said so was the clock: the reactor
+went from 1:26 to 42s, `invoice-service` from 35.7s to 5.5s, `import-service`
+from 27.6s to 5.0s. `import-service` also reported `Tests run: 0` under
+Surefire, correct in itself since all three of its tests are `*IT`, and
+meaningless without the Failsafe line that should have followed.
+
+Fixed by moving Failsafe to the root's `<build><plugins>`, where it is
+genuinely inherited. `spring-boot-maven-plugin` stays in `pluginManagement`,
+and the asymmetry is the point: every module should run integration tests, but
+only services should be repackaged — in `<plugins>` it would produce a fat
+`common` jar and break every consumer.
+
+**Two lessons.** A build-structure change can delete tests from the run while
+staying green, so "BUILD SUCCESS" is not a verification of it; the check is
+that the specific expected test counts appear. And a known-good timing baseline
+is a real diagnostic — the 42s was the only signal that anything was wrong.
+
+### Remaining
+
+1. Tests for `api-gateway`, `export-service` and `archive-service`
+2. JaCoCo with a coverage gate and badge, now a single declaration in the
+   parent rather than seven copies
+3. Why `@EmbeddedKafka` selects the ZooKeeper broker over KRaft

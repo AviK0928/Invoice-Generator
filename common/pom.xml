@@ -4,6 +4,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <parent>
+        <groupId>com.example.invoice</groupId>
+        <artifactId>invoice-generator</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
     <groupId>com.example.invoice</groupId>
     <artifactId>common</artifactId>
     <version>1.5.0</version>
@@ -12,43 +18,32 @@
     <description>Common Module for Invoice Generator</description>
 
     <!--
-      This module deliberately has no parent, so it is not a Spring Boot
-      application. Two consequences that have both bitten:
+      A library, not a Spring Boot application — because it declares no
+      spring-boot-maven-plugin, so nothing repackages it. That, not the
+      parent, is what makes a module an application.
 
-      1. java.version alone does nothing — maven.compiler.release is what sets
-         the target. Without it Maven defaults to Java 8 and this module
-         silently compiles to a different level than every other module.
+      This module had no parent at all until the root POM was promoted, on the
+      belief that inheriting one would make it an application. It doesn't, and
+      the belief cost two bugs:
 
-      2. spring-boot-starter-parent's -parameters flag is absent, so argument
-         names are stripped from the bytecode and Spring Data cannot bind
-         named query parameters. Fixed by the compiler plugin below AND by
-         @Param on every repository method — belt and braces, because the
-         failure is at runtime and looks like a query problem.
+      1. java.version alone sets nothing. Without maven.compiler.release this
+         module compiled to Java 8 while every other module compiled to 21.
 
-      The Boot BOM is imported rather than inherited so versions stay aligned
-      with the services.
+      2. Without spring-boot-starter-parent's -parameters flag, argument names
+         were stripped from the bytecode and Spring Data could not bind named
+         query parameters.
+
+      Both now come from the parent. @Param stays on every repository method
+      regardless: that failure is at runtime and reads as a query bug, so the
+      belt-and-braces is worth keeping.
+
+      Its own version too — 1.5.0, not the parent's 1.0.0. Services depend on
+      it by explicit version.
     -->
     <properties>
-        <java.version>21</java.version>
-        <maven.compiler.release>21</maven.compiler.release>
-        <maven.compiler.parameters>true</maven.compiler.parameters>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <spring-boot.version>3.5.3</spring-boot.version>
         <openpdf.version>2.0.3</openpdf.version>
         <commons-csv.version>1.10.0</commons-csv.version>
     </properties>
-
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
 
     <dependencies>
 
@@ -137,19 +132,4 @@
             <scope>provided</scope>
         </dependency>
     </dependencies>
-
-        <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
-                <configuration>
-                    <compilerArgs>
-                        <arg>-parameters</arg>
-                    </compilerArgs>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>
