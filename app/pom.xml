@@ -80,6 +80,26 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+                <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -92,12 +112,16 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
 
-            <!-- No jacoco plugin yet. Declaring it would opt this module into
-                 the 0.55 gate with no tests written, failing the build for a
-                 reason unrelated to the change. It goes in with the first
-                 integration test, along with the coverage/pom.xml dependency
-                 whose absence would otherwise leave this module silently out
-                 of the aggregate figure. -->
+            <!--
+              Now that app has a test. The gate is the inherited
+              coverage.minimum; app is mostly configuration classes executed at
+              context startup, so a single @SpringBootTest covers most of it —
+              the same reason api-gateway clears the gate on three classes.
+            -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
         </plugins>
     </build>
 </project>

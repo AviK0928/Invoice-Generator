@@ -1,0 +1,41 @@
+# The container's URL, username and password come from @ServiceConnection.
+# Everything here is what the app refuses to start without, or what has to
+# differ from production.
+
+spring:
+    jpa:
+        hibernate:
+            ddl-auto: validate
+    flyway:
+        locations: classpath:db/migration/app
+
+outbox:
+    transport: in-process
+    # The dispatcher's scheduler is left running — nothing in this test writes an
+    # outbox row, so it polls an empty table. If a test ever does, park it here
+    # the way invoice-service does, or it races the assertions.
+    poll-interval-ms: 2000
+
+# Startup fails without these: jwt.secret must be at least 32 bytes, and neither
+# hash has a default in any profile. Values are irrelevant — no test logs in.
+jwt:
+    secret: test-secret-that-is-comfortably-over-32-bytes-long
+auth:
+    users:
+        admin:
+            password-hash: $2b$10$gEVIhuWm4QhkKTQmrTrrFOrhJraFkmp/LVHv0hbCGVSkDH4oJyCbm
+            roles: [ADMIN, USER]
+        user:
+            password-hash: $2b$10$gEVIhuWm4QhkKTQmrTrrFOrhJraFkmp/LVHv0hbCGVSkDH4oJyCbm
+            roles: [USER]
+
+springdoc:
+    api-docs:
+        enabled: false
+    swagger-ui:
+        enabled: false
+
+logging:
+    level:
+        root: WARN
+        com.example.invoice: INFO

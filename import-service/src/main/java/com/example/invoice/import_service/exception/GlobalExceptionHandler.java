@@ -10,7 +10,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
-@RestControllerAdvice
+@RestControllerAdvice(basePackages = "com.example.invoice.import_service")
 public class GlobalExceptionHandler extends BaseExceptionHandler {
 
     @ExceptionHandler(ImportValidationException.class)

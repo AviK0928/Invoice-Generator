@@ -3358,3 +3358,108 @@ could change underneath it.
 for JVM startup, six modules of context and six Flyway migrations. It is the
 tier, not the application — but it is what a reviewer experiences, so the README
 states it plainly rather than letting them conclude the deploy is broken.
+## Five error contracts, one of them working
+
+`DELETE /api/invoices/99999` returned 500 in production. So did
+`/api/invoices/99999`, `/api/archives/99999` and `/api/exports/invoice/99999`.
+`/api/customers/99999` returned a correct 404.
+
+`ExceptionHandlerExceptionResolver` walks advice beans in order and takes the
+first advice containing a **matching** method — not the most specific match
+across advices. Every `GlobalExceptionHandler` inherits
+`@ExceptionHandler(Exception.class)` from `BaseExceptionHandler`, which matches
+everything. Unscoped, whichever advice sorted first answered for the entire
+application, and the other four modules' handlers were unreachable.
+
+Ordering cannot fix it. Any order still puts one advice's catch-all ahead of
+another's specific handler. `@RestControllerAdvice(basePackages = "...")` on each
+of the five is the fix: within a single advice, Spring does pick the most
+specific handler, so scoping restores that.
+
+**I recorded this hazard two commits earlier and called it harmless**, reasoning
+that all five produce identical output. That is true of the catch-all and false
+of everything else — the specific handlers differ, and they were the ones being
+shadowed. The note was written while adding `AuthExceptionHandler`, from the same
+mechanism, and the inference stopped one step short.
+
+**No existing test could catch it.** Each module's `@WebMvcTest` slice registers
+exactly one advice, so every contract is correct in isolation. The bug exists
+only when all five share a context — a configuration that had no test at all
+until `app` got one.
+
+`ErrorContractIT` is that test: one `@SpringBootTest` over the real assembly,
+asserting the `type` URI rather than the status for a 404 from each of the four
+modules. Type, not status, because a 404 from the wrong handler is still a 404.
+
+`app` now declares the JaCoCo plugin and appears in `coverage/pom.xml`, whose own
+comment had been warning that a module missing from that list is silently missing
+from the aggregate.
+
+**Related, still open:** `NoResourceFoundException` is thrown when no controller
+matched, so no `basePackages`-scoped advice matches it, and an unmapped path in a
+standalone service falls back to Spring's default error body instead of
+`problem+json`. Unreachable in the consolidated app, where `anyRequest().denyAll()`
+returns 401 before routing.
+
+## Roles are issued and never checked
+
+`user` — a token carrying only `ROLE_USER` — returns 200 from
+`/api/invoices/admin/outbox/status`. Nothing in the system reads an authority:
+there is no `@PreAuthorize` anywhere, and `SecurityConfig` requires only
+`authenticated()` on `/api/**`.
+
+The mechanism is complete and the policy is absent. Recorded in the README as a
+gap rather than hidden, since the demo publishes both accounts.
+
+## Five error contracts, one of them working
+
+`DELETE /api/invoices/99999` returned 500 in production. So did
+`/api/invoices/99999`, `/api/archives/99999` and `/api/exports/invoice/99999`.
+`/api/customers/99999` returned a correct 404.
+
+`ExceptionHandlerExceptionResolver` walks advice beans in order and takes the
+first advice containing a **matching** method — not the most specific match
+across advices. Every `GlobalExceptionHandler` inherits
+`@ExceptionHandler(Exception.class)` from `BaseExceptionHandler`, which matches
+everything. Unscoped, whichever advice sorted first answered for the entire
+application, and the other four modules' handlers were unreachable.
+
+Ordering cannot fix it. Any order still puts one advice's catch-all ahead of
+another's specific handler. `@RestControllerAdvice(basePackages = "...")` on each
+of the five is the fix: within a single advice, Spring does pick the most
+specific handler, so scoping restores that.
+
+**I recorded this hazard two commits earlier and called it harmless**, reasoning
+that all five produce identical output. That is true of the catch-all and false
+of everything else — the specific handlers differ, and they were the ones being
+shadowed. The note was written while adding `AuthExceptionHandler`, from the same
+mechanism, and the inference stopped one step short.
+
+**No existing test could catch it.** Each module's `@WebMvcTest` slice registers
+exactly one advice, so every contract is correct in isolation. The bug exists
+only when all five share a context — a configuration that had no test at all
+until `app` got one.
+
+`ErrorContractIT` is that test: one `@SpringBootTest` over the real assembly,
+asserting the `type` URI rather than the status for a 404 from each of the four
+modules. Type, not status, because a 404 from the wrong handler is still a 404.
+
+`app` now declares the JaCoCo plugin and appears in `coverage/pom.xml`, whose own
+comment had been warning that a module missing from that list is silently missing
+from the aggregate.
+
+**Related, still open:** `NoResourceFoundException` is thrown when no controller
+matched, so no `basePackages`-scoped advice matches it, and an unmapped path in a
+standalone service falls back to Spring's default error body instead of
+`problem+json`. Unreachable in the consolidated app, where `anyRequest().denyAll()`
+returns 401 before routing.
+
+## Roles are issued and never checked
+
+`user` — a token carrying only `ROLE_USER` — returns 200 from
+`/api/invoices/admin/outbox/status`. Nothing in the system reads an authority:
+there is no `@PreAuthorize` anywhere, and `SecurityConfig` requires only
+`authenticated()` on `/api/**`.
+
+The mechanism is complete and the policy is absent. Recorded in the README as a
+gap rather than hidden, since the demo publishes both accounts.

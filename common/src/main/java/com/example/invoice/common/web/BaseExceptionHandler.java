@@ -27,6 +27,13 @@ import java.util.Map;
  * handlers.
  *
  * Subclasses add only their own domain exceptions and call {@link #problem}.
+ * Subclasses MUST scope themselves with basePackages. Five unscoped advices in
+ * one context is not five contracts, it is one: the resolver takes the first
+ * advice with a matching method, and the inherited handler on Exception matches
+ * everything, so the first advice registered answers for the whole application.
+ * Four modules returned "internal server error" for their own domain 404s in
+ * production before this was scoped. The @WebMvcTest slices cannot catch it —
+ * each registers exactly one advice.
  */
 public abstract class BaseExceptionHandler {
 

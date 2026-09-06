@@ -6,7 +6,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice
+@RestControllerAdvice(basePackages = "com.example.invoice.invoice_service")
 public class GlobalExceptionHandler extends BaseExceptionHandler {
 
     @ExceptionHandler(InvoiceNotFoundException.class)
