@@ -3,6 +3,8 @@ package com.example.invoice.common.web;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
+import org.springframework.data.mapping.PropertyReferenceException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -62,6 +64,35 @@ public abstract class BaseExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, "Missing parameter",
                 "Required parameter '" + ex.getParameterName() + "' is not present.",
                 "missing-parameter");
+    }
+
+    /**
+     * A sort parameter naming something that is not sortable.
+     *
+     * Two exceptions reach here depending on the repository. A derived query
+     * throws PropertyReferenceException from Spring Data's mapping layer; a
+     * declared @Query throws InvalidDataAccessApiUsageException from
+     * JpaQueryTransformerSupport, which validates the sort against the select
+     * clause. Neither was mapped, so both landed in the catch-all and a bad
+     * query parameter was reported as a server error.
+     *
+     * Swagger UI makes this the default experience rather than an edge case:
+     * it prefills Pageable's sort parameter with ["string"], so the first
+     * Execute on any paged endpoint returned a 500.
+     *
+     * The exception message is not echoed back — it names internal query
+     * structure and suggests JpaSort.unsafe, neither of which is a client's
+     * business. Logged at warn instead, because InvalidDataAccessApiUsageException
+     * can also signal genuine server-side misuse of the Data API, and mapping
+     * it to 400 would otherwise hide that entirely.
+     */
+    @ExceptionHandler({ PropertyReferenceException.class,
+            InvalidDataAccessApiUsageException.class })
+    public ProblemDetail handleInvalidSort(Exception ex) {
+        log.warn("Rejected data-access request as a bad parameter", ex);
+        return problem(HttpStatus.BAD_REQUEST, "Invalid sort parameter",
+                "The sort parameter names a property that cannot be sorted on.",
+                "invalid-sort");
     }
 
     /** Safety net for unique constraints when a pre-check loses a race. */

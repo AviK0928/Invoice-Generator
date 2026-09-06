@@ -3259,3 +3259,46 @@ token extraction was wrong — the response record is
 Two of those three 401s were real assertions passing and one was the harness
 failing, and they were indistinguishable. Echoing the extracted value before
 using it costs one line and separates them.
+## A 500 on the first click
+
+Swagger UI prefills `Pageable`'s sort parameter with `["string"]`, so the first
+Execute on any paged endpoint returned a 500. Consolidation did not cause it —
+every paged endpoint always had it — but consolidation is how it surfaced,
+because Swagger is now the interface rather than a per-service page nobody
+opened.
+
+The exception was `InvalidDataAccessApiUsageException` from
+`JpaQueryTransformerSupport.checkSortExpression`, not the
+`PropertyReferenceException` predicted. The difference is the repository:
+`CustomerRepository.search` is a declared `@Query`, so Spring Data validates the
+sort against the select clause; a derived query throws the other one. Both are
+reachable, so `BaseExceptionHandler` maps both to 400.
+
+The message is not echoed to the client — it names query internals and suggests
+`JpaSort.unsafe`. Logged at warn instead, because
+`InvalidDataAccessApiUsageException` also signals genuine server-side misuse of
+the Data API, and mapping it to 400 silently would hide that class of bug. A
+real cost, accepted knowingly. The narrower fix — an allow-list of sortable
+properties per endpoint — is more correct and touches five controllers.
+Deferred.
+
+The test stubs the exception rather than provoking it: the slice has no
+database, and the mapping is what is under test. Confirmed end to end against
+the running artifact afterwards — same endpoint, same token, 400 with the sort
+parameter and 200 without.
+
+Also renamed `CustomControllerErrorContractTest.java` to match the class it
+declares. It ran only because the class is package-private and Surefire matches
+on the filename.
+
+## One spec, not five
+
+The five per-service `OpenApiConfig` classes are excluded from the app's scan —
+five `OpenAPI` beans in one context is a `NoUniqueBeanDefinitionException`.
+`ApiDocsConfig` replaces them with one spec covering all five modules'
+controllers, and carries the `bearerAuth` security scheme that gives Swagger UI
+its Authorize button. Without it the page renders but every `/api` call from it
+is a 401, which would make the deployed demo look broken.
+
+Named `ApiDocsConfig`, not `OpenApiConfig`: five classes with that simple name
+are excluded by name in the application class, and a sixth would be a trap.
