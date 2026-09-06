@@ -1,0 +1,43 @@
+spring:
+    jpa:
+        hibernate:
+            ddl-auto: validate
+        show-sql: false
+        open-in-view: false
+
+    flyway:
+        enabled: true
+        clean-disabled: false
+
+    kafka:
+        bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+        consumer:
+            group-id: archive-service-test
+            auto-offset-reset: earliest
+        admin:
+            # The unit is mandatory. A bare "5" binds as five MILLISECONDS.
+            fail-fast: false
+            operation-timeout: 10s
+
+# Parked an hour out. The unarchive test asserts the outbox row before it is
+# dispatched; a scheduler polling every two seconds would race that.
+outbox:
+    poll-interval-ms: 3600000
+    batch-size: 100
+    max-attempts: 3
+    cleanup-cron: "-"
+
+springdoc:
+    api-docs:
+        enabled: false
+    swagger-ui:
+        enabled: false
+
+logging:
+    level:
+        root: WARN
+        com.example.invoice: INFO
+        kafka: WARN
+        org.apache.kafka: WARN
+        org.springframework.kafka: WARN
+        state.change.logger: ERROR

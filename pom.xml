@@ -62,7 +62,7 @@
         <surefireArgLine/>
         <failsafeArgLine/>
         <!-- Floor per module, not a target. Raise as coverage climbs. -->
-        <coverage.minimum>0.50</coverage.minimum>
+        <coverage.minimum>0.55</coverage.minimum>
     </properties>
 
     <build>

@@ -2810,3 +2810,57 @@ in the most security-relevant module.
    all six image builds until it is copied too — as `coverage` did. A
    `.dockerignore` plus `COPY . .` would fix it at the cost of layer caching
 5. Render deployment
+
+### export-service — assert the archive, don't weigh it
+
+Five integration tests on the monthly ZIP. The obvious assertion —
+`zip.length > 0` — passes against an archive of empty PDFs, so these open it:
+entry names, the `%PDF-` header and `%%EOF` trailer on each PDF, and parsed CSV
+cell contents.
+
+The CSV assertions do double duty. `ExportService.buildCsv` dereferences
+`invoice.getCustomer().getName()` with no null check, and `customer` is a
+read-only join on `customerId`. Finding "Test Co" in the output proves the join
+resolves inside the read-only transaction; a missing customer row would be a
+500. That path is still unguarded — the tests always seed the customer.
+
+`export.max-invoices` is 2 in the test profile. The production default of 500
+could not be exercised without 501 fixtures, and the guard is what stands
+between a large month and an OOM on a 512MB instance.
+
+Not covered: whether the PDF contains the invoice's items. OpenPDF compresses
+streams, so asserting on "Widget" needs a parser. The magic bytes prove it is a
+PDF, not that it is the right one.
+
+### archive-service — a bug I predicted that wasn't there
+
+`ArchiveEventConsumer` has no inbox, unlike `export-service`, and
+`archivedInvoiceId` is IDENTITY — so a redelivered archive event looked like it
+would write a second row for the same invoice. A test was written asserting
+exactly that.
+
+It failed: duplicate key value violates unique constraint "uk_archived_invoices_invoice_id"
+
+
+There is a unique constraint on `invoice_id` in the migration, which I had not
+read. Redelivery cannot duplicate the archive.
+
+That is not the same as idempotency. The consumer does not catch
+`DataIntegrityViolationException`, so a repeat delivery is retried and
+eventually dead-lettered. The archive stays correct; the cost is a dead letter
+and an error in the logs where `export-service` would skip silently. The test
+now asserts that, with a comment explaining what it costs.
+
+**Worth recording that the test was written to fail.** It encoded a prediction
+about a bug, and the prediction was wrong in the safe direction — which is only
+discoverable by running it.
+
+### Also noticed, not fixed
+
+`ArchivedInvoiceItem` reaches its invoice two ways: an `invoiceId` column and a
+`@ManyToOne ArchivedInvoice`. `ArchiveMapper.toItemEntities` sets only the
+column, so the FK is always null and `ArchivedInvoice.getItems()` is always
+empty. `ArchiveService` works around it by querying `findByInvoiceId`
+separately. The `@OneToMany` and its `orphanRemoval = true` are dead weight,
+and `UnarchiveService`'s manual delete-by-invoiceId is load-bearing because of
+it.
