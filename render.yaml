@@ -9,7 +9,7 @@ services:
     name: invoice-generator
     runtime: docker
     plan: free
-    region: oregon
+    region: singapore
     dockerfilePath: ./Dockerfile
     dockerContext: .
     # No build args: the Dockerfile defaults SERVICE=app.
