@@ -12,11 +12,6 @@
 	<version>0.0.1-SNAPSHOT</version>
 	<name>customer-service</name>
 	<description>Customer Service for Invoice Generator</description>
-	<properties>
-		<!-- MockMvc tests only, no integration data to merge. Raised when
-			customer-service gets ITs. -->
-        <coverage.minimum>0.05</coverage.minimum>
-	</properties>
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -84,11 +79,6 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>kafka</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
