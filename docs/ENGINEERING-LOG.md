@@ -2719,3 +2719,9 @@ setting any threshold.
 2. A `coverage` aggregate module (`report-aggregate`) for a single figure, then
    a `check` gate set just below the real number, then the badge
 3. Why `@EmbeddedKafka` selects the ZooKeeper broker over KRaft
+
+2. A coverage gate. `jacoco:check` in the aggregate module reads its own
+   module's `jacoco.exec`, which does not exist there, so it skips — and a
+   skipped check passes. Needs pointing at the aggregate data before it means
+   anything. The aggregate report itself works: 34%, 1,575 of 4,501
+   instructions, all seven bundles.

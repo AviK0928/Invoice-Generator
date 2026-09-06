@@ -39,6 +39,7 @@
         <module>export-service</module>
         <module>import-service</module>
         <module>archive-service</module>
+        <module>coverage</module>
     </modules>
 
     <properties>
