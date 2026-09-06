@@ -21,7 +21,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
@@ -174,5 +176,35 @@ class PdfRequestServiceIT extends IntegrationTest {
         dto.setPaymentStatus(PaymentStatus.PENDING);
         dto.setItems(List.of(item));
         return dto;
+    }
+
+    @Test
+    @DisplayName("a request pending past the timeout is marked FAILED")
+    void staleRequestIsFailed() {
+        PdfRequest request = pdfRequestService.request(invoiceId);
+        // Backdated rather than waiting fifteen minutes.
+        request.setRequestedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        pdfRequestRepository.save(request);
+
+        assertThat(pdfRequestService.failStaleRequests()).isOne();
+
+        PdfRequest reloaded = pdfRequestService.status(request.getRequestId());
+        assertThat(reloaded.getStatus()).isEqualTo(PdfRequestStatus.FAILED);
+        assertThat(reloaded.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("the sweep leaves recent and completed requests alone")
+    void sweepSparesRecentAndCompleted() {
+        pdfRequestService.request(invoiceId);
+
+        PdfRequest old = pdfRequestService.request(invoiceId);
+        old.setRequestedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        old.setStatus(PdfRequestStatus.READY);
+        pdfRequestRepository.save(old);
+
+        // Only PENDING is swept: a READY request that has sat a while is
+        // waiting on the user, not on export-service.
+        assertThat(pdfRequestService.failStaleRequests()).isZero();
     }
 }

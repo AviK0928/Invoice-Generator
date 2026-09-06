@@ -26,6 +26,20 @@ spring:
 export:
     max-invoices: 2
 
+# Parked an hour out. Without this the dispatcher inherits 2000ms from
+# application.yml and polls the table these tests assert on: the ready-event
+# assertion checks published_at is null, and a dispatcher running in the
+# background will eventually win that race.
+outbox:
+    poll-interval-ms: 3600000
+    batch-size: 100
+    max-attempts: 3
+    cleanup-cron: "-"
+
+pdf:
+    retention-hours: 24
+    cleanup-cron: "-"
+
 springdoc:
     api-docs:
         enabled: false

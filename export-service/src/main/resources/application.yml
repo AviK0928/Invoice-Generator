@@ -67,6 +67,10 @@ outbox:
   max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
   cleanup-cron: ${OUTBOX_CLEANUP_CRON:0 0 3 * * *}
 
+pdf:
+  retention-hours: ${PDF_RETENTION_HOURS:24}
+  cleanup-cron: ${PDF_CLEANUP_CRON:0 30 3 * * *}
+
 management:
   endpoints:
     web:

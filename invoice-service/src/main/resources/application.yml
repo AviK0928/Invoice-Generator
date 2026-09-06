@@ -75,6 +75,10 @@ invoice:
   auto-archive-after-months: ${AUTO_ARCHIVE_MONTHS:6}
   auto-archive-cron: ${AUTO_ARCHIVE_CRON:0 0 2 * * *}
 
+pdf:
+  request-timeout-minutes: ${PDF_REQUEST_TIMEOUT_MINUTES:15}
+  sweep-cron: ${PDF_SWEEP_CRON:0 */5 * * * *}
+
 management:
   endpoints:
     web:

@@ -43,6 +43,13 @@ outbox:
 invoice:
     auto-archive-cron: "-"
 
+# Cron disabled; the sweep is invoked directly. A background job writing to the
+# table these tests assert on is the race the outbox dispatcher already taught
+# us to avoid.
+pdf:
+    request-timeout-minutes: 15
+    sweep-cron: "-"
+
 springdoc:
     api-docs:
         enabled: false
