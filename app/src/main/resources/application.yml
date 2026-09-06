@@ -90,6 +90,10 @@ springdoc:
     swagger-ui:
         enabled: ${SPRINGDOC_ENABLED:true}
         path: /swagger-ui.html
+        # Redirects / to the UI. The bare domain is what anyone handed this link
+        # opens first, and without this it falls to anyRequest().denyAll() and
+        # returns a 401 that reads as a broken deployment rather than a secured one.
+        use-root-path: true
         operations-sorter: method
         tags-sorter: alpha
         doc-expansion: none

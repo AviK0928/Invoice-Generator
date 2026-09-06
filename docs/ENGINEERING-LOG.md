@@ -3302,3 +3302,59 @@ is a 401, which would make the deployed demo look broken.
 
 Named `ApiDocsConfig`, not `OpenApiConfig`: five classes with that simple name
 are excluded by name in the application class, and a sixth would be a trap.
+
+## Two things the gateway was hiding
+
+Both surfaced only once the demo was public, and both were consequences of one
+servlet context rather than six.
+
+**A wrong password returned 500.** `AuthService` throws `BadCredentialsException`
+from a controller. At the gateway that reached Spring Security's reactive
+handling and became a 401; consolidated, it reaches the five domain advices,
+whose inherited `@ExceptionHandler(Exception.class)` turns it into a server
+error. `AuthContractTest` passes either way — it runs against the reactive
+gateway, where the advices do not exist.
+
+`AuthExceptionHandler` maps `AuthenticationException` — the parent, so the whole
+family is covered — to 401.
+
+**The fix nearly introduced something worse.** The first version was
+`@RestControllerAdvice` at `HIGHEST_PRECEDENCE` extending `BaseExceptionHandler`.
+The resolver takes the first advice in order with a *matching* method, and the
+inherited catch-all on `Exception` matches everything — so that advice would have
+answered every exception in the application and every domain 404 and 409 would
+have become a 500. `assignableTypes = AuthController.class` scopes it. The
+`@Order` is still needed on top: for an exception from `AuthController` the five
+unordered advices match too, via the same inherited catch-all.
+
+Caught while writing it, not by a test. A test would have caught it — the
+regression check is now one curl for a missing customer returning 404.
+
+**Related, recorded not fixed:** the five domain advices each inherit that
+catch-all and none declares an order, so which one handles a generic exception is
+whatever order the context registers them in. Harmless because all five produce
+identical output, but arbitrary, and only arbitrary since they landed in one
+context.
+
+## The bare domain returned 401
+
+`/` matched no permit rule and fell to `anyRequest().denyAll()` — correct, and a
+terrible first impression: a reviewer pastes the URL and sees a browser error
+page reading "401 Unauthorized", which is indistinguishable from a broken
+deployment.
+
+`springdoc.swagger-ui.use-root-path: true` redirects `/` to the UI, and `"/"` is
+permitted in the filter chain. `requestMatchers("/")` matches the root exactly,
+so `/nonsense` still returns 401 — verified, because a matcher that quietly
+widened to everything is exactly the failure this could have been.
+
+springdoc's own key rather than a redirect controller: springdoc owns
+`swagger-ui.path`, and a controller would hardcode a path that configuration
+could change underneath it.
+
+## Cold start on the free tier
+
+94 seconds, not the 30–60 the platform documents. 0.1 CPU means a tenth of a core
+for JVM startup, six modules of context and six Flyway migrations. It is the
+tier, not the application — but it is what a reviewer experiences, so the README
+states it plainly rather than letting them conclude the deploy is broken.

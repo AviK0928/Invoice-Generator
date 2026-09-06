@@ -27,35 +27,35 @@ import org.springframework.security.web.SecurityFilterChain;
 @Configuration
 public class SecurityConfig {
 
-    @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        return http
-                .csrf(csrf -> csrf.disable())
-                .httpBasic(basic -> basic.disable())
-                .formLogin(form -> form.disable())
-                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
-                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
-                        .requestMatchers("/error").permitAll()
-                        .requestMatchers("/swagger-ui.html", "/swagger-ui/**",
-                                "/webjars/**", "/v3/api-docs/**", "/v3/api-docs")
-                        .permitAll()
-                        .requestMatchers("/api/**").authenticated()
-                        .anyRequest().denyAll())
-                .oauth2ResourceServer(oauth2 -> oauth2
-                        .jwt(jwt -> jwt.jwtAuthenticationConverter(authoritiesConverter())))
-                .build();
-    }
+        @Bean
+        public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+                return http
+                                .csrf(csrf -> csrf.disable())
+                                .httpBasic(basic -> basic.disable())
+                                .formLogin(form -> form.disable())
+                                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                                .authorizeHttpRequests(auth -> auth
+                                                .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+                                                .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                                                .requestMatchers("/error").permitAll()
+                                                .requestMatchers("/", "/swagger-ui.html", "/swagger-ui/**",
+                                                                "/webjars/**", "/v3/api-docs/**", "/v3/api-docs")
+                                                .permitAll()
+                                                .requestMatchers("/api/**").authenticated()
+                                                .anyRequest().denyAll())
+                                .oauth2ResourceServer(oauth2 -> oauth2
+                                                .jwt(jwt -> jwt.jwtAuthenticationConverter(authoritiesConverter())))
+                                .build();
+        }
 
-    /** Maps the "roles" claim to ROLE_-prefixed authorities. */
-    private JwtAuthenticationConverter authoritiesConverter() {
-        JwtGrantedAuthoritiesConverter authorities = new JwtGrantedAuthoritiesConverter();
-        authorities.setAuthoritiesClaimName("roles");
-        authorities.setAuthorityPrefix("ROLE_");
+        /** Maps the "roles" claim to ROLE_-prefixed authorities. */
+        private JwtAuthenticationConverter authoritiesConverter() {
+                JwtGrantedAuthoritiesConverter authorities = new JwtGrantedAuthoritiesConverter();
+                authorities.setAuthoritiesClaimName("roles");
+                authorities.setAuthorityPrefix("ROLE_");
 
-        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(authorities);
-        return converter;
-    }
+                JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+                converter.setJwtGrantedAuthoritiesConverter(authorities);
+                return converter;
+        }
 }
