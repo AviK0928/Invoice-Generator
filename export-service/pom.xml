@@ -12,6 +12,9 @@
 	<version>0.0.1-SNAPSHOT</version>
 	<name>export-service</name>
 	<description>Export Service for Invoice Generator</description>
+	<properties>
+		<openpdf.version>2.0.3</openpdf.version>
+	</properties>
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -90,6 +93,16 @@
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
             <scope>test</scope>
+        </dependency>
+		<!-- Declared here because PdfExportService is the only thing in the
+             project that renders PDFs. It compiled for months against a
+             transitive copy from `common`, which came in for a PdfUtil that
+             nothing called; deleting that class surfaced the missing
+             declaration. -->
+        <dependency>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf</artifactId>
+            <version>${openpdf.version}</version>
         </dependency>
 	</dependencies>
 

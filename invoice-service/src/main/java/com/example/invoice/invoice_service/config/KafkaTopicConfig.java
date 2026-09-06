@@ -43,4 +43,11 @@ public class KafkaTopicConfig {
         return TopicBuilder.name(Topics.UNARCHIVE_INVOICES + Topics.DLT_SUFFIX)
                 .partitions(1).replicas(1).build();
     }
+
+    /** Consumed here; declared so auto-create can stay off. */
+    @Bean
+    public NewTopic pdfReadyDlt() {
+        return TopicBuilder.name(Topics.INVOICE_PDF_READY + Topics.DLT_SUFFIX)
+                .partitions(1).replicas(1).build();
+    }
 }

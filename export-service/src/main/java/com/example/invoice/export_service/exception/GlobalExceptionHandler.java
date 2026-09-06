@@ -21,4 +21,10 @@ public class GlobalExceptionHandler extends BaseExceptionHandler {
         return problem(HttpStatus.PAYLOAD_TOO_LARGE, "Export too large",
                 ex.getMessage(), "export-too-large");
     }
+
+    @ExceptionHandler(PdfDocumentNotFoundException.class)
+    public ProblemDetail handlePdfNotFound(PdfDocumentNotFoundException ex) {
+        return problem(HttpStatus.NOT_FOUND, "PDF not available",
+                ex.getMessage(), "pdf-not-available");
+    }
 }

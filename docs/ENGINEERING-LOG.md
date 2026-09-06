@@ -2864,3 +2864,63 @@ empty. `ArchiveService` works around it by querying `findByInvoiceId`
 separately. The `@OneToMany` and its `orphanRemoval = true` are dead weight,
 and `UnarchiveService`'s manual delete-by-invoiceId is load-bearing because of
 it.
+
+## Asynchronous PDF generation
+
+A user asks invoice-service for a PDF; export-service renders it and stores it;
+the user downloads it once and it is deleted. No email — that is a future
+extension, and it would add an SMTP provider, credentials and a class of
+failure that cannot be tested, for a payoff a reviewer cannot see.
+
+The event carries only a request id and an invoice id. export-service already
+projects the invoice from invoice-events, so a snapshot in the payload would
+duplicate data that could disagree with the projection.
+
+### Storage: nothing survives the download
+
+`pdf_documents.content` is `bytea` and the row is deleted as the bytes are
+returned. Render's disk is ephemeral, so a file written by one instance is
+invisible to the next and gone after a restart; the database is the only
+durable option. Deleting on download means there is no retention policy to
+write and no cleanup job to schedule.
+
+Deleted *before* the response is written, not after. Delete-on-success survives
+a dropped connection, but the delete would have to happen outside the
+transaction that read the bytes, and a crash between the two leaves a row
+nothing will ever remove. A user who loses a download re-requests; a leaked row
+is there forever.
+
+`@Lob` on the `byte[]` was the first attempt and Flyway's schema validation
+caught it: Hibernate expects a Postgres large object (`oid`) for `@Lob`, and
+large objects live outside the table and are only removed by an explicit
+`lo_unlink` — so every download would have leaked one. `columnDefinition =
+"bytea"` and no `@Lob`.
+
+### Deleting dead code broke a different module
+
+`common` carried an OpenPDF dependency for `PdfUtil`, a second PDF renderer
+with no callers. `ZipUtil` was dead too — `ExportService` builds its ZIP
+inline. Both deleted, and the dependency with them.
+
+`export-service` then failed to compile: `PdfExportService` imports
+`com.lowagie.text` and had never declared OpenPDF, relying on the transitive
+copy from `common`. Its build was correct only by accident of what another
+module happened to pull in. Now declared where it is used.
+
+That is the good version of this failure. The bad one is `common` dropping the
+dependency years later for an unrelated reason, with nobody connecting the two.
+
+### export-service publishes now
+
+Its application class said "consume-only … needs neither the outbox nor a
+producer", which stopped being true the moment it had to announce a finished
+PDF. Adding `OutboxConfiguration` alone was not enough — the dispatcher needs a
+`KafkaTemplate`, so `KafkaProducerConfiguration` too, and `common.outbox` in
+both `@EntityScan` and `@EnableJpaRepositories`, which replace rather than add.
+
+### Inbox asymmetry, still
+
+invoice-service's new PDF-ready consumer does an inbox check; its three older
+consumers do not. archive-service has none at all. Three different answers to
+the same question across one system. Not fixed, and worth deciding deliberately
+rather than by accretion.

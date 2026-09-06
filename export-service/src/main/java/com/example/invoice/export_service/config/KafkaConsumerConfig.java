@@ -1,6 +1,8 @@
 package com.example.invoice.export_service.config;
 
 import com.example.invoice.common.kafka.dto.InvoiceEventDTO;
+import com.example.invoice.common.kafka.dto.PdfRequestEventDTO;
+
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.annotation.Value;
@@ -53,6 +55,31 @@ public class KafkaConsumerConfig {
             DefaultErrorHandler errorHandler) {
         ConcurrentKafkaListenerContainerFactory<String, InvoiceEventDTO> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(invoiceEventConsumerFactory());
+        factory.setCommonErrorHandler(errorHandler);
+        return factory;
+    }
+
+    @Bean
+    public ConsumerFactory<String, PdfRequestEventDTO> pdfRequestConsumerFactory() {
+        JsonDeserializer<PdfRequestEventDTO> delegate = new JsonDeserializer<>(PdfRequestEventDTO.class);
+        delegate.addTrustedPackages("com.example.invoice.common.kafka.dto");
+        delegate.setUseTypeHeaders(false);
+
+        Map<String, Object> config = new HashMap<>();
+        config.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        config.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+
+        return new DefaultKafkaConsumerFactory<>(config,
+                new ErrorHandlingDeserializer<>(new StringDeserializer()),
+                new ErrorHandlingDeserializer<>(delegate));
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, PdfRequestEventDTO> pdfRequestKafkaListenerFactory(
+            DefaultErrorHandler errorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, PdfRequestEventDTO> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(pdfRequestConsumerFactory());
         factory.setCommonErrorHandler(errorHandler);
         return factory;
     }

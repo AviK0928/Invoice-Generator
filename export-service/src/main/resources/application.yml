@@ -61,6 +61,12 @@ springdoc:
   show-actuator: false
   default-produces-media-type: application/json
 
+outbox:
+  poll-interval-ms: ${OUTBOX_POLL_INTERVAL_MS:2000}
+  batch-size: ${OUTBOX_BATCH_SIZE:100}
+  max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
+  cleanup-cron: ${OUTBOX_CLEANUP_CRON:0 0 3 * * *}
+
 management:
   endpoints:
     web:

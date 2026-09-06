@@ -37,6 +37,12 @@ public final class Topics {
      */
     public static final String INVOICE_IMPORTED = "invoice-imported";
 
+    /** invoice-service -> export-service: a user asked for a PDF. */
+    public static final String INVOICE_PDF_REQUESTED = "invoice-pdf-requested";
+
+    /** export-service -> invoice-service: the PDF is generated and downloadable. */
+    public static final String INVOICE_PDF_READY = "invoice-pdf-ready";
+
     /** Suffix appended by DeadLetterPublishingRecoverer. */
     public static final String DLT_SUFFIX = "-dlt";
 }

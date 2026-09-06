@@ -45,7 +45,8 @@ import org.testcontainers.utility.DockerImageName;
         Topics.UNARCHIVE_INVOICES,
         Topics.CUSTOMER_EVENTS + Topics.DLT_SUFFIX,
         Topics.INVOICE_DELETE + Topics.DLT_SUFFIX,
-        Topics.UNARCHIVE_INVOICES + Topics.DLT_SUFFIX
+        Topics.UNARCHIVE_INVOICES + Topics.DLT_SUFFIX,
+        Topics.INVOICE_PDF_READY + Topics.DLT_SUFFIX
 })
 @TestPropertySource(properties = "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}")
 public abstract class IntegrationTest {

@@ -15,6 +15,12 @@ public class GlobalExceptionHandler extends BaseExceptionHandler {
                 ex.getMessage(), "invoice-not-found");
     }
 
+    @ExceptionHandler(PdfRequestNotFoundException.class)
+    public ProblemDetail handlePdfRequestNotFound(PdfRequestNotFoundException ex) {
+        return problem(HttpStatus.NOT_FOUND, "PDF request not found",
+                ex.getMessage(), "pdf-request-not-found");
+    }
+
     @ExceptionHandler(InvalidCustomerException.class)
     public ProblemDetail handleInvalidCustomer(InvalidCustomerException ex) {
         return problem(HttpStatus.UNPROCESSABLE_ENTITY, "Unknown customer",
